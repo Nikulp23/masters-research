@@ -10,19 +10,28 @@ window.AGENTIC_TASK_CATALOG = {
     "localPath": ""
   },
   "no-color": {
+    "description": "The app should disable ANSI color output when the NO_COLOR environment variable is set.",
     "testFiles": ["tests/test_no_color_app.py"],
     "testCommand": "python3 -m unittest discover -s tests -v",
     "localPath": "fixtures/no_color_repo"
   },
   "negative-flag-fixture": {
+    "description": "Omitting the negative flag should keep the default True value, while explicitly passing it should flip the value to False.",
     "testFiles": ["tests/test_negative_flag_app.py"],
     "testCommand": "python3 -m unittest discover -s tests -p test_negative_flag_app.py -v",
     "localPath": "fixtures/negative_flag_repo"
   },
   "plugin-loader-fixture": {
+    "description": "The plugin loader should skip classes that have no kernel-decorated methods and load the first valid plugin class instead.",
     "testFiles": ["tests/test_plugin_loader.py"],
     "testCommand": "python3 -m unittest discover -s tests -p test_plugin_loader.py -v",
     "localPath": "fixtures/plugin_loader_repo"
+  },
+  "tag-parser-fixture": {
+    "description": "The parser should trim whitespace around comma-separated tags and ignore blank entries.",
+    "testFiles": ["tests/test_tag_parser.py"],
+    "testCommand": "python3 -m unittest discover -s tests -p test_tag_parser.py -v",
+    "localPath": "fixtures/tag_parser_repo"
   },
   "click-no-color-real": {
     "testFiles": ["tests/test_issue_no_color.py"],

@@ -78,10 +78,21 @@
                 ${issues.map((issue) => {
                   const taskMeta = catalog[issue.task_id] || {};
                   const link = issueUrl(issue, taskMeta);
+                  const description = taskMeta.description || "No description recorded for this issue.";
                   if (!link) {
-                    return `<li>${escapeHtml(issue.title || issue.task_id)}</li>`;
+                    return `
+                      <li class="issue-reference-item">
+                        <div>${escapeHtml(issue.title || issue.task_id)}</div>
+                        <p class="issue-description">${escapeHtml(description)}</p>
+                      </li>
+                    `;
                   }
-                  return `<li><a class="resource-link" href="${escapeHtml(link)}" target="_blank" rel="noreferrer">${escapeHtml(issue.title || issue.task_id)}</a></li>`;
+                  return `
+                    <li class="issue-reference-item">
+                      <a class="resource-link" href="${escapeHtml(link)}" target="_blank" rel="noreferrer">${escapeHtml(issue.title || issue.task_id)}</a>
+                      <p class="issue-description">${escapeHtml(description)}</p>
+                    </li>
+                  `;
                 }).join("")}
               </ul>
             </article>

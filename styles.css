@@ -681,6 +681,17 @@ th {
   font-weight: 600;
 }
 
+.issue-reference-item + .issue-reference-item {
+  margin-top: 14px;
+}
+
+.issue-description {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.96rem;
+  line-height: 1.5;
+}
+
 .graph-stack {
   display: grid;
   gap: 20px;

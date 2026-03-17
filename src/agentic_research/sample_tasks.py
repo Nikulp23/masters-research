@@ -153,6 +153,33 @@ SAMPLE_TASKS: dict[str, TaskSpec] = {
         "readonly_files": ["tests/test_plugin_loader.py"],
         "test_command": ["python3", "-m", "unittest", "discover", "-s", "tests", "-p", "test_plugin_loader.py", "-v"],
     },
+    "tag-parser-fixture": {
+        "id": "tag-parser-fixture",
+        "title": "Tag parser should strip whitespace and ignore empty entries",
+        "repository": "local-fixture/tag-parser-demo",
+        "description": (
+            "Fix the local tag parser so comma-separated tags are stripped of surrounding "
+            "whitespace and blank entries are ignored."
+        ),
+        "difficulty": "easy",
+        "constraints": [
+            "Keep the patch local to the tag parser helper.",
+            "Do not change the function signature or return type.",
+        ],
+        "acceptance_keywords": [
+            "strip whitespace",
+            "ignore empty entries",
+        ],
+        "validation_instructions": (
+            "Validation passes when comma-separated tags are trimmed, blank values are "
+            "ignored, and the real sandbox unit test passes."
+        ),
+        "execution_mode": "sandbox",
+        "fixture_dir": "fixtures/tag_parser_repo",
+        "editable_files": ["src/tag_parser.py"],
+        "readonly_files": ["tests/test_tag_parser.py"],
+        "test_command": ["python3", "-m", "unittest", "discover", "-s", "tests", "-p", "test_tag_parser.py", "-v"],
+    },
     "click-no-color-real": {
         "id": "click-no-color-real",
         "title": "Support NO_COLOR environment variable",
