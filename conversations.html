@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agentic Coding Research Conversations</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <a class="brand" href="index.html">
+        <span class="brand-mark"></span>
+        <span>
+          <span class="eyebrow">RPI Master's Research</span>
+          <strong>Agentic Coding Systems</strong>
+        </span>
+      </a>
+      <nav class="nav">
+        <a href="index.html">Overview</a>
+        <a href="results.html">Results</a>
+        <a href="conversations.html">Conversations</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="conversation-layout">
+        <aside class="panel issue-browser">
+          <p class="eyebrow">Issues</p>
+          <h2>Available conversations</h2>
+          <div id="issue-list" class="issue-list"></div>
+        </aside>
+
+        <section class="panel conversation-browser">
+          <div id="conversation-app"></div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <script src="site-data/conversations.js"></script>
+  <script src="conversations.js"></script>
+</body>
+</html>
