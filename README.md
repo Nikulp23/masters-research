@@ -1,123 +1,120 @@
-# Research Project
+# Masters Research
 
-This project compares a `single-agent` baseline and a `multi-agent` workflow on real coding issues.
+## Real Repo. Real Fix. Real Test.
 
-## In Simple Terms
+### Single-Agent vs Multi-Agent AI on real coding issues.
 
-What this project does:
+This project takes a real issue from a real repository, lets both architectures try to fix it in a sandbox, runs real tests, and compares which one actually did better.
 
-1. pick a real issue from a real repository
-2. clone or copy that repo into a sandbox
-3. let a `single-agent` baseline try to fix it
-4. let a `multi-agent` workflow try to fix it
-5. run real tests
-6. compare which system did better
+- View Results: `results.html`
+- Browse Conversations: `conversations.html`
+- See How It Works: `index.html`
 
-That is the core idea.
+## Research Question
 
-## What “working” means
+### Which architecture performs better on real coding issues?
 
-A run counts as working only if:
+This project studies whether multi-agent coding systems perform better than single-agent systems on real software-fix tasks.
 
-- the agent edits real code
-- the code is written into a sandbox copy of the repo
-- the real test command is executed
-- the test passes
+The project also measures:
 
-This is not supposed to be only “the model suggested a solution.”
-It is supposed to be:
+- Success rate
+- Failure categories
+- Latency
+- Iteration count
+- LLM call usage
 
-- real repo
-- real code edits
-- real tests
-- real pass/fail result
+## Workflow
 
-## Research Pipeline
+### How each experiment works
 
-The pipeline is now set up to support repeatable experiments:
+**01 Choose a real issue**  
+Pick an issue from a real open-source Python repository.
 
-1. choose one or more tasks
-2. run both architectures against the same repo snapshot
-3. save a per-run JSON record
-4. save a suite-level `manifest.json`, `summary.json`, and `summary.csv`
-5. classify failures like:
-   - `success`
-   - `invalid_patch_payload`
-   - `patch_target_mismatch`
-   - `patch_application_failed`
-   - `llm_budget_exhausted`
-   - `test_failed`
+**02 Create a sandbox**  
+Clone or copy the repo into an isolated workspace so the original source is untouched.
 
-This gives you a proper benchmark folder for each suite under `benchmark_runs/`.
+**03 Run both architectures**  
+Let the single-agent system and the multi-agent system try to fix the same task.
 
-## Current Status
+**04 Run real tests**  
+Execute the actual validation command and treat that output as the result.
 
-The project already has:
+**05 Compare outcomes**  
+Measure success, latency, iterations, revisions, and LLM call usage.
 
-- a runnable `single-agent` workflow
-- a runnable `multi-agent` workflow with explicit role handoffs
-- OpenAI-backed execution
-- deterministic fallback mode
-- a real local sandbox repo demo
-- one real repo issue run against `pallets/click`
-- OpenAI model configured via `OPENAI_MODEL` and now defaulting to `gpt-5.2-codex`
-- multi-agent LLM call budget can be disabled with `AGENTIC_MULTI_MAX_LLM_CALLS=0` and is now unset by default
+## Architectures
 
-## What was already proven
+### Single-Agent
 
-We already ran a real issue-style test:
+The single-agent baseline handles the whole task in one loop. It reads the issue, summarizes the broken behavior, reasons about the likely root cause, proposes a patch, applies that patch in the sandbox, and then checks whether the real test passed.
 
-- repo: `pallets/click`
-- issue type: `NO_COLOR` support
-- both the `single-agent` baseline and the `multi-agent` workflow edited real code
-- both were tested with a real sandboxed unittest
-- both passed
+If the test fails, the same agent gets the failure feedback and tries again until it either succeeds or hits the configured revision and call limits. This is the lowest-coordination path in the project, which makes it the clean baseline for measuring efficiency, latency, and patch quality.
 
-This means the project is now doing the right kind of work.
+### Multi-Agent
 
-## Main Files
+The multi-agent system is built as true role-isolated workers. The Coordinator only plans and decides. The Analyst only summarizes the issue and isolates the likely root cause. Separate Engineer workers then run in parallel, each producing its own patch candidate in its own branch. The Tester and Reviewer evaluate each branch, and the coordinator chooses the best branch or stops the run if the workflow is stuck.
 
-- `index.html`: main project website
-- `results.html`: result summary page for real runs
-- `styles.css`: shared website styling
-- `.env`: local OpenAI config
-- `src/agentic_research/`: main code
-- `fixtures/no_color_repo/`: local sandbox demo repo
-- `tests/test_graphs.py`: automated tests
+This means one agent is not switching roles anymore. Each role stays fixed, and the parallel engineer branches let the system try multiple implementation paths at the same time. The research question is whether that extra specialization and parallel search helps enough to justify the higher coordination cost and additional LLM calls.
+
+## Workflow Graph
+
+### The graph built in this repo
+
+The single-agent path is one revision loop. The multi-agent path adds role isolation, parallel engineer branches, deterministic test-based validation, direct question-and-answer messaging between agents, and a coordinator that can stop early when the run stalls.
+
+### Single-Agent baseline
+
+1 agent instance owns the whole cycle and reuses failure feedback on the next attempt.
+
+`Summarize` → `Diagnose` → `Patch` → `Run Tests` → `Review` → `Retry or Finish`
+
+If validation fails or review says revise, the loop continues until it succeeds or hits revision limits.
+
+### Multi-Agent workflow
+
+6 different agent instances are used by default: 1 coordinator, 1 analyst, 2 engineers, 1 tester, and 1 reviewer.
+
+`Coordinator` → `Analyst` → `Engineer Fanout`
+
+Parallel branches:
+
+- `Engineer 1` → `Test + Review`
+- `Engineer 2` → `Test + Review`
+
+Direct messages when needed:
+
+- `Engineer ↔ Analyst`
+- `Tester ↔ Engineer`
+- `Reviewer ↔ Engineer`
+- `Coordinator ↔ Any role`
+
+`Coordinator Decision` → `Finish or Retry`
+
+Agents still have fixed responsibilities, but they can directly ask other agents questions during execution instead of relying only on one-way handoffs.
 
 ## Useful Commands
 
 Run tests:
 
-- `PYTHONPATH=src python3 -m unittest discover -s tests -v`
-
-Clean previous benchmark and website data:
-
-- `./clean-data.sh`
+```bash
+PYTHONPATH=src python3 -m unittest discover -s tests -v
+```
 
 Run single-agent:
 
-- `PYTHONPATH=src python3 -m agentic_research.cli --architecture single --task no-color --mode openai`
+```bash
+PYTHONPATH=src python3 -m agentic_research.cli --architecture single --task no-color --mode openai
+```
 
 Run multi-agent:
 
-- `PYTHONPATH=src python3 -m agentic_research.cli --architecture multi --task no-color --mode openai`
-
-Run a real issue comparison:
-
-- `PYTHONPATH=src python3 -m agentic_research.cli --architecture single --task click-no-color-real --mode openai`
-- `PYTHONPATH=src python3 -m agentic_research.cli --architecture multi --task click-no-color-real --mode openai`
+```bash
+PYTHONPATH=src python3 -m agentic_research.cli --architecture multi --task no-color --mode openai
+```
 
 Run a benchmark suite:
 
-- `PYTHONPATH=src python3 -m agentic_research.benchmark_cli --tasks no-color click-no-color-real --architectures single multi --repeats 2 --mode deterministic`
-
-Export website conversation data:
-
-- `PYTHONPATH=src python3 -m agentic_research.site_export --benchmark-root benchmark_runs --output-dir site-data`
-
-## Safety
-
-- `.env` is local
-- API usage is bounded by call limits and iteration limits
-- runs happen in sandbox copies, not the original repo
+```bash
+PYTHONPATH=src python3 -m agentic_research.benchmark_cli --tasks no-color click-no-color-real --architectures single multi --repeats 2 --mode deterministic
+```
