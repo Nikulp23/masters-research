@@ -68,42 +68,92 @@
     return "Neither architecture has a passing latest run for this issue.";
   }
 
+  function architectureRuns(issue, architecture) {
+    return issue.runs && issue.runs[architecture] ? issue.runs[architecture] : [];
+  }
+
+  function summarizeRuns(runs) {
+    if (!runs.length) {
+      return {
+        runCount: 0,
+        successRate: "No runs",
+        failureCategories: "No runs",
+        avgLatency: "No runs",
+        avgIterations: "No runs",
+        avgLlmCalls: "No runs",
+      };
+    }
+
+    const successes = runs.filter((run) => run.final_status === "success").length;
+    const avgLatency = runs.reduce((sum, run) => sum + Number(run.latency_seconds || 0), 0) / runs.length;
+    const avgIterations = runs.reduce((sum, run) => sum + Number(run.iterations || 0), 0) / runs.length;
+    const avgLlmCalls = runs.reduce((sum, run) => sum + Number(run.llm_calls_used || 0), 0) / runs.length;
+    const failureCounts = {};
+
+    runs.forEach((run) => {
+      const key = run.failure_category || "unknown";
+      failureCounts[key] = (failureCounts[key] || 0) + 1;
+    });
+
+    const failureCategories = Object.entries(failureCounts)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([label, count]) => `${label} (${count})`)
+      .join(", ");
+
+    return {
+      runCount: runs.length,
+      successRate: `${((successes / runs.length) * 100).toFixed(0)}%`,
+      failureCategories,
+      avgLatency: `${avgLatency.toFixed(2)}s`,
+      avgIterations: avgIterations.toFixed(2),
+      avgLlmCalls: avgLlmCalls.toFixed(2),
+    };
+  }
+
   function renderSummary() {
     if (!data.issues.length) {
       summaryRoot.innerHTML = '<div class="empty-state">No benchmark results yet. Run a benchmark suite and export site data to populate this page.</div>';
       return;
     }
 
-    const rows = data.issues
+    const cards = data.issues
       .map((issue) => {
-        const single = latestRun(issue, "single");
-        const multi = latestRun(issue, "multi");
+        const singleStats = summarizeRuns(architectureRuns(issue, "single"));
+        const multiStats = summarizeRuns(architectureRuns(issue, "multi"));
         return `
-          <tr>
-            <td>${issueLabel(issue)}</td>
-            <td>${escapeHtml(formatStatus(single))}</td>
-            <td>${escapeHtml(formatStatus(multi))}</td>
-            <td>${escapeHtml(takeaway(issue))}</td>
-          </tr>
+          <article class="test-card" open>
+            <div class="test-card-body">
+              <div class="detail-grid">
+                <article class="detail-block">
+                  <h3>${issueLabel(issue)}</h3>
+                  <ul class="clean-list">
+                    <li>Repository: <code>${escapeHtml(issue.repository || "Unknown")}</code></li>
+                    <li>Single-agent success rate: ${escapeHtml(singleStats.successRate)}</li>
+                    <li>Single-agent failure categories: ${escapeHtml(singleStats.failureCategories)}</li>
+                    <li>Single-agent latency: ${escapeHtml(singleStats.avgLatency)}</li>
+                    <li>Single-agent iteration count: ${escapeHtml(singleStats.avgIterations)}</li>
+                    <li>Single-agent LLM call usage: ${escapeHtml(singleStats.avgLlmCalls)}</li>
+                  </ul>
+                </article>
+                <article class="detail-block">
+                  <h3>Multi-Agent</h3>
+                  <ul class="clean-list">
+                    <li>Run count: ${escapeHtml(String(multiStats.runCount))}</li>
+                    <li>Success rate: ${escapeHtml(multiStats.successRate)}</li>
+                    <li>Failure categories: ${escapeHtml(multiStats.failureCategories)}</li>
+                    <li>Latency: ${escapeHtml(multiStats.avgLatency)}</li>
+                    <li>Iteration count: ${escapeHtml(multiStats.avgIterations)}</li>
+                    <li>LLM call usage: ${escapeHtml(multiStats.avgLlmCalls)}</li>
+                  </ul>
+                </article>
+              </div>
+            </div>
+          </article>
         `;
       })
       .join("");
 
-    summaryRoot.innerHTML = `
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Issue</th>
-              <th>Single-Agent</th>
-              <th>Multi-Agent</th>
-              <th>Takeaway</th>
-            </tr>
-          </thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </div>
-    `;
+    summaryRoot.innerHTML = `<div class="accordion-list">${cards}</div>`;
   }
 
   function renderRunDetails(label, run) {
@@ -119,6 +169,8 @@
   function renderIssueCard(issue, index) {
     const single = latestRun(issue, "single");
     const multi = latestRun(issue, "multi");
+    const singleStats = summarizeRuns(architectureRuns(issue, "single"));
+    const multiStats = summarizeRuns(architectureRuns(issue, "multi"));
     const changedFiles = Array.from(new Set([...(single?.changed_files || []), ...(multi?.changed_files || [])]));
     return `
       <details class="test-card"${index === 0 ? " open" : ""}>
@@ -141,10 +193,18 @@
               </ul>
             </article>
             <article class="detail-block">
-              <h3>Run summary</h3>
+              <h3>Requested stats</h3>
               <ul class="clean-list">
-                ${renderRunDetails("Single-agent", single)}
-                ${renderRunDetails("Multi-agent", multi)}
+                <li>Single-agent success rate: ${escapeHtml(singleStats.successRate)}</li>
+                <li>Single-agent failure categories: ${escapeHtml(singleStats.failureCategories)}</li>
+                <li>Single-agent latency: ${escapeHtml(singleStats.avgLatency)}</li>
+                <li>Single-agent iteration count: ${escapeHtml(singleStats.avgIterations)}</li>
+                <li>Single-agent LLM call usage: ${escapeHtml(singleStats.avgLlmCalls)}</li>
+                <li>Multi-agent success rate: ${escapeHtml(multiStats.successRate)}</li>
+                <li>Multi-agent failure categories: ${escapeHtml(multiStats.failureCategories)}</li>
+                <li>Multi-agent latency: ${escapeHtml(multiStats.avgLatency)}</li>
+                <li>Multi-agent iteration count: ${escapeHtml(multiStats.avgIterations)}</li>
+                <li>Multi-agent LLM call usage: ${escapeHtml(multiStats.avgLlmCalls)}</li>
               </ul>
             </article>
           </div>

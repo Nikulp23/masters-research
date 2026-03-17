@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Agentic Coding Research Conversations</title>
+  <title>Agentic Coding Research Tasks</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -25,21 +25,20 @@
     </header>
 
     <main>
-      <section class="conversation-layout">
-        <aside class="panel issue-browser">
-          <p class="eyebrow">Issues</p>
-          <h2>Available conversations</h2>
-          <div id="issue-list" class="issue-list"></div>
-        </aside>
-
-        <section class="panel conversation-browser">
-          <div id="conversation-app"></div>
-        </section>
+      <section class="panel">
+        <p class="eyebrow">Reference Page</p>
+        <h2>Repos, tests, and tried issues</h2>
+        <p class="lede">
+          This page groups the issues currently in your exported run data by repository, shows the repo link, lists the tests used,
+          and then shows the issue names you tried as clickable links.
+        </p>
+        <div id="task-reference-list" class="accordion-list"></div>
       </section>
     </main>
   </div>
 
   <script src="site-data/conversations.js"></script>
-  <script src="conversations.js"></script>
+  <script src="task-catalog.js"></script>
+  <script src="tasks.js"></script>
 </body>
 </html>

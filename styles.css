@@ -667,6 +667,20 @@ th {
   color: var(--muted);
 }
 
+.resource-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
+.resource-link:hover {
+  color: var(--text);
+}
+
+.issue-link-list a {
+  font-weight: 600;
+}
+
 .graph-stack {
   display: grid;
   gap: 20px;
