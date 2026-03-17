@@ -1,0 +1,26 @@
+[project]
+name = "agentic-research"
+version = "0.1.0"
+description = "LangGraph research scaffold for comparing single-agent and multi-agent coding systems."
+requires-python = ">=3.11"
+dependencies = [
+  "langgraph",
+  "langchain",
+  "langchain-core",
+  "pydantic>=2",
+]
+
+[project.scripts]
+agentic-research = "agentic_research.cli:main"
+agentic-benchmark = "agentic_research.benchmark_cli:main"
+agentic-site-export = "agentic_research.site_export:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
