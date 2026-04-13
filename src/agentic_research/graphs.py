@@ -137,7 +137,7 @@ def _prepare_execution_state(task: TaskSpec, state: AgentState) -> AgentState:
     if task.get("execution_mode") != "sandbox":
         return state
     workspace_path = create_workspace(task)
-    venv_python = setup_virtualenv(workspace_path)
+    venv_python = setup_virtualenv(workspace_path, task.get("test_command", []))
     repo_paths = task.get("editable_files", []) + task.get("readonly_files", [])
     prompt_context = task.get("prompt_context")
     test_env = {**state.get("test_env", {}), "AGENTIC_VENV_PYTHON": venv_python}

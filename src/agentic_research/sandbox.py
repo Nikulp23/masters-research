@@ -126,10 +126,11 @@ def clone_workspace(workspace_path: str, suffix: str) -> str:
                 except (OSError, PermissionError):
                     pass
     _setup_js_dependencies(str(cloned))
+    _setup_cargo_dependencies(str(cloned))
     return str(cloned)
 
 
-def setup_virtualenv(workspace_path: str) -> str:
+def setup_virtualenv(workspace_path: str, test_command: list[str] | None = None) -> str:
     workspace = Path(workspace_path)
     venv_dir = workspace / ".venv"
     subprocess.run(["python3", "-m", "venv", str(venv_dir)], check=True, cwd=workspace_path, text=True, capture_output=True)
@@ -138,24 +139,14 @@ def setup_virtualenv(workspace_path: str) -> str:
         raise FileNotFoundError(f"Virtualenv python not found: {python_bin}")
     for metadata_file in ("pyproject.toml", "setup.py", "setup.cfg"):
         if (workspace / metadata_file).exists():
-            subprocess.run(
-                [str(python_bin), "-m", "pip", "install", "-e", "."],
-                check=True,
-                cwd=workspace_path,
-                text=True,
-                capture_output=True,
-            )
+            _run_setup_command([str(python_bin), "-m", "pip", "install", "-e", "."], workspace_path)
             break
-    # Ensure pytest is always available for benchmark test commands.
-    subprocess.run(
-        [str(python_bin), "-m", "pip", "install", "pytest", "-q"],
-        check=True,
-        cwd=workspace_path,
-        text=True,
-        capture_output=True,
-    )
+    if _uses_python_pytest(test_command or []):
+        _run_setup_command([str(python_bin), "-m", "pip", "install", "pytest", "-q"], workspace_path)
     # Install JS/TS dependencies if this is a JavaScript/TypeScript project.
     _setup_js_dependencies(workspace_path)
+    # Fetch Rust dependencies if this is a Cargo project.
+    _setup_cargo_dependencies(workspace_path)
     return str(python_bin)
 
 
@@ -168,7 +159,39 @@ def _setup_js_dependencies(workspace_path: str) -> None:
         cmd = ["pnpm", "install", "--frozen-lockfile"]
     else:
         cmd = ["npm", "install", "--legacy-peer-deps"]
-    subprocess.run(cmd, cwd=workspace_path, check=True, capture_output=True, text=True)
+    _run_setup_command(cmd, workspace_path)
+
+
+def _uses_python_pytest(command: list[str]) -> bool:
+    return len(command) >= 3 and command[0].startswith("python") and command[1:3] == ["-m", "pytest"]
+
+
+def _setup_cargo_dependencies(workspace_path: str) -> None:
+    """Fetch Cargo dependencies when Cargo.toml is present."""
+    workspace = Path(workspace_path)
+    if not (workspace / "Cargo.toml").exists():
+        return
+    _run_setup_command(["cargo", "fetch"], workspace_path)
+
+
+def _run_setup_command(command: list[str], workspace_path: str) -> None:
+    result = subprocess.run(command, cwd=workspace_path, capture_output=True, text=True)
+    if result.returncode == 0:
+        return
+    details = "\n".join(
+        part
+        for part in (
+            f"Setup command failed: {' '.join(command)}",
+            f"cwd: {workspace_path}",
+            f"returncode: {result.returncode}",
+            "stdout:",
+            result.stdout.strip(),
+            "stderr:",
+            result.stderr.strip(),
+        )
+        if part
+    )
+    raise RuntimeError(details)
 
 
 def load_file_bundle(workspace_path: str, paths: list[str]) -> dict[str, str]:
@@ -379,6 +402,13 @@ def _build_preflight_command(command: list[str]) -> list[str] | None:
     if len(command) >= 3 and command[1:3] == ["-m", "pytest"]:
         targets = [arg for arg in command[3:] if not arg.startswith("-")]
         return [command[0], "-m", "pytest", *targets, "--collect-only", "-q"]
+    if len(command) >= 2 and command[:2] == ["cargo", "test"]:
+        cargo_args = command[2:]
+        if "--" in cargo_args:
+            cargo_args = cargo_args[:cargo_args.index("--")]
+        if "--no-run" not in cargo_args:
+            cargo_args = [*cargo_args, "--no-run"]
+        return ["cargo", "test", *cargo_args]
     return None
 
 
@@ -420,6 +450,11 @@ def _validate_test_command_inputs(workspace: Path, command: list[str]) -> str | 
                 continue
             if ("/" in arg or arg.endswith(".py")) and not (workspace / arg).exists():
                 return f"pytest target does not exist: {arg}"
+        return None
+
+    if len(command) >= 2 and command[:2] == ["cargo", "test"]:
+        if not (workspace / "Cargo.toml").exists():
+            return "cargo test requires Cargo.toml in workspace root"
         return None
 
     return None
