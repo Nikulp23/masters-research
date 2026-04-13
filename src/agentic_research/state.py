@@ -21,6 +21,7 @@ class AgentState(TypedDict, total=False):
     editable_files: list[str]
     readonly_files: list[str]
     test_command: list[str]
+    regression_test_command: list[str]
     test_env: dict[str, str]
     workspace_path: str
     base_workspace_path: str
@@ -37,6 +38,8 @@ class AgentState(TypedDict, total=False):
     test_stdout: str
     test_stderr: str
     test_returncode: int
+    regression_passed: bool
+    regression_returncode: int
     review_recommendation: ReviewRecommendation
     review_notes: str
     coordinator_plan: str
@@ -53,6 +56,7 @@ class AgentState(TypedDict, total=False):
     revision_count: int
     max_revision_rounds: int
     llm_calls_used: int
+    tokens_used: int
     max_llm_calls: int
     final_status: Status
     logs: list[dict[str, Any]]
@@ -63,9 +67,9 @@ class AgentState(TypedDict, total=False):
 def build_initial_state(
     task: dict[str, Any],
     architecture: Literal["single", "multi"],
-    max_iterations: int = 4,
-    max_revision_rounds: int = 2,
-    max_llm_calls: int = 12,
+    max_iterations: int = 50,
+    max_revision_rounds: int = 30,
+    max_llm_calls: int = 0,
 ) -> AgentState:
     return {
         "task_id": task["id"],
@@ -81,6 +85,7 @@ def build_initial_state(
         "editable_files": task.get("editable_files", []),
         "readonly_files": task.get("readonly_files", []),
         "test_command": task.get("test_command", []),
+        "regression_test_command": task.get("regression_test_command", []),
         "test_env": task.get("test_env", {}),
         "workspace_path": "",
         "base_workspace_path": "",
@@ -97,6 +102,8 @@ def build_initial_state(
         "test_stdout": "",
         "test_stderr": "",
         "test_returncode": 0,
+        "regression_passed": None,
+        "regression_returncode": None,
         "review_recommendation": "revise",
         "review_notes": "",
         "coordinator_plan": "",
@@ -113,6 +120,7 @@ def build_initial_state(
         "revision_count": 0,
         "max_revision_rounds": max_revision_rounds,
         "llm_calls_used": 0,
+        "tokens_used": 0,
         "max_llm_calls": max_llm_calls,
         "final_status": "in_progress",
         "logs": [],

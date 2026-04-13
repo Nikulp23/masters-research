@@ -23,10 +23,10 @@ class ResearchConfig:
 def load_config() -> ResearchConfig:
     return ResearchConfig(
         mode=os.getenv("AGENTIC_MODE", "deterministic"),
-        openai_model=os.getenv("OPENAI_MODEL", "gpt-5.2-codex"),
-        max_iterations=int(os.getenv("AGENTIC_MAX_ITERATIONS", "4")),
-        max_revision_rounds=int(os.getenv("AGENTIC_MAX_REVISIONS", "2")),
-        max_llm_calls=int(os.getenv("AGENTIC_MAX_LLM_CALLS", "12")),
+        openai_model=os.getenv("OPENAI_MODEL", "gpt-5.1-codex-mini"),
+        max_iterations=int(os.getenv("AGENTIC_MAX_ITERATIONS", "50")),
+        max_revision_rounds=int(os.getenv("AGENTIC_MAX_REVISIONS", "30")),
+        max_llm_calls=int(os.getenv("AGENTIC_MAX_LLM_CALLS", "0")),
         multi_max_llm_calls=int(os.getenv("AGENTIC_MULTI_MAX_LLM_CALLS", "0")),
-        multi_engineer_workers=int(os.getenv("AGENTIC_MULTI_ENGINEER_WORKERS", "2")),
+        multi_engineer_workers=int(os.getenv("AGENTIC_MULTI_ENGINEER_WORKERS", "1")),
     )

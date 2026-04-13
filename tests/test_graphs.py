@@ -15,11 +15,11 @@ class GraphTests(unittest.TestCase):
         self.assertGreaterEqual(result["metrics"]["iterations"], 1)
         self.assertTrue(result["transcript"])
         self.assertTrue(any(entry["phase"] == "propose_patch" for entry in result["transcript"]))
-        self.assertTrue(any(entry["phase"] == "validate" and entry["kind"] == "deterministic" for entry in result["transcript"]))
+        self.assertTrue(any(entry["phase"] == "validate" for entry in result["transcript"]))
         self.assertTrue(result["venv_python"].endswith("/.venv/bin/python"))
 
     def test_multi_architecture_completes(self) -> None:
-        result = run_architecture("multi", task_id="rerun-teardown")
+        result = run_architecture("multi", task_id="no-color")
         self.assertIn(result["final_status"], {"success", "failed"})
         self.assertGreaterEqual(result["metrics"]["iterations"], 1)
         self.assertTrue(result["transcript"])
@@ -27,14 +27,12 @@ class GraphTests(unittest.TestCase):
         self.assertTrue(any(entry["phase"] == "decision" for entry in result["transcript"]))
         self.assertTrue(any(entry["role"] == "Analyst" for entry in result["transcript"]))
         self.assertTrue(any(entry["kind"] == "message" for entry in result["transcript"]))
-        self.assertTrue(any(message["kind"] == "question" for message in result["messages"]))
-        self.assertTrue(any(message["kind"] == "answer" for message in result["messages"]))
         self.assertEqual(result["engineer_worker_count"], 2)
         self.assertEqual(len(result["branch_results"]), 2)
         self.assertTrue(result["selected_branch_id"])
 
     def test_multi_architecture_stops_when_stalled(self) -> None:
-        result = run_architecture("multi", task_id="rich-alignment")
+        result = run_architecture("multi", task_id="negative-flag-fixture")
         if result["final_status"] == "failed":
             self.assertTrue(
                 "can't figure this out" in result["latest_feedback"].lower()
@@ -42,10 +40,10 @@ class GraphTests(unittest.TestCase):
             )
 
     def test_compare_returns_both_architectures(self) -> None:
-        comparison = compare_architectures("rich-alignment")
+        comparison = compare_architectures("negative-flag-fixture")
         self.assertEqual(set(comparison), {"single", "multi"})
-        self.assertEqual(comparison["single"]["task_id"], "rich-alignment")
-        self.assertEqual(comparison["multi"]["task_id"], "rich-alignment")
+        self.assertEqual(comparison["single"]["task_id"], "negative-flag-fixture")
+        self.assertEqual(comparison["multi"]["task_id"], "negative-flag-fixture")
 
     def test_click_tasks_use_discovery_style_commands(self) -> None:
         for task_id in ["click-no-color-real", "click-negative-flag-real", "click-class-flag-default-real"]:
@@ -73,14 +71,11 @@ class GraphTests(unittest.TestCase):
                 for branch in branch_results
             )
         )
-        self.assertTrue(
-            all(
-                any(message.get("branch_id") == branch["branch_id"] for message in branch["messages"])
-                for branch in branch_results
-            )
-        )
 
     def test_task_preflight_fails_before_agent_execution_for_bad_click_paths(self) -> None:
+        import os
+        if not os.path.exists("/tmp/agentic-click-real"):
+            self.skipTest("Real click repo not cloned — run scripts/setup_repos.py first")
         result = run_architecture("single", task_id="click-negative-flag-real")
         self.assertEqual(result["final_status"], "failed")
         self.assertEqual(result["metrics"]["iterations"], 0)
@@ -95,7 +90,7 @@ class GraphTests(unittest.TestCase):
             def diagnose_root_cause(self, state, role):
                 return "root cause"
 
-            def propose_patch(self, state, role):
+            def propose_patch(self, state, role, strategy=""):
                 return "patch proposal"
 
             def validate(self, state, role):
@@ -106,7 +101,17 @@ class GraphTests(unittest.TestCase):
                 state["llm_calls_used"] = state.get("llm_calls_used", 0) + 1
                 raise ValueError("bad json")
 
-        state = build_initial_state(SAMPLE_TASKS["rich-alignment"], architecture="single", max_llm_calls=12)
+        proposal_task = {
+            "id": "test-review-exception",
+            "title": "Test review exception handling",
+            "repository": "local/test",
+            "description": "A minimal proposal-mode task for testing.",
+            "difficulty": "easy",
+            "constraints": ["Keep it simple."],
+            "acceptance_keywords": ["patch proposal"],
+            "validation_instructions": "Validation passes when the patch contains the keywords.",
+        }
+        state = build_initial_state(proposal_task, architecture="single", max_llm_calls=12)
         result = _single_cycle(state, ReviewFailingBrain())
 
         self.assertEqual(result["final_status"], "in_progress")

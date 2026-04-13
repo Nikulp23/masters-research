@@ -75,7 +75,29 @@ def create_workspace(task: dict[str, Any]) -> str:
     if not source.exists():
         raise FileNotFoundError(f"Fixture directory does not exist: {source}")
     workspace = Path(tempfile.mkdtemp(prefix=f"agentic-{task['id']}-"))
-    shutil.copytree(source, workspace, dirs_exist_ok=True)
+    shutil.copytree(source, workspace, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".git", "node_modules"))
+
+    base_commit = task.get("base_commit")
+    if base_commit:
+        # Copy the .git directory separately (needed for checkout), then reset to buggy commit.
+        git_source = source / ".git"
+        if not git_source.exists():
+            raise FileNotFoundError(
+                f"base_commit specified but {source} has no .git directory. "
+                "Run `git fetch --unshallow` in the repo first."
+            )
+        shutil.copytree(git_source, workspace / ".git")
+        result = subprocess.run(
+            ["git", "checkout", base_commit, "--", "."],
+            cwd=str(workspace),
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Failed to checkout base_commit {base_commit!r} in workspace:\n{result.stderr}"
+            )
+
     for relative_path, content in task.get("injected_test_files", {}).items():
         target = workspace / relative_path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -88,7 +110,22 @@ def clone_workspace(workspace_path: str, suffix: str) -> str:
     if not source.exists():
         raise FileNotFoundError(f"Workspace does not exist: {source}")
     cloned = Path(tempfile.mkdtemp(prefix=f"{source.name}-{suffix}-"))
-    shutil.copytree(source, cloned, dirs_exist_ok=True)
+    shutil.copytree(source, cloned, dirs_exist_ok=True, ignore=shutil.ignore_patterns("node_modules"))
+    # Re-point editable-install path references inside the cloned venv so that
+    # package imports resolve from the clone's source tree, not the original.
+    old_path = str(source)
+    new_path = str(cloned)
+    venv_dir = cloned / ".venv"
+    if venv_dir.exists():
+        for f in venv_dir.rglob("*"):
+            if f.suffix in (".pth", ".egg-link") or f.name == "direct_url.json":
+                try:
+                    content = f.read_text(errors="replace")
+                    if old_path in content:
+                        f.write_text(content.replace(old_path, new_path))
+                except (OSError, PermissionError):
+                    pass
+    _setup_js_dependencies(str(cloned))
     return str(cloned)
 
 
@@ -109,7 +146,29 @@ def setup_virtualenv(workspace_path: str) -> str:
                 capture_output=True,
             )
             break
+    # Ensure pytest is always available for benchmark test commands.
+    subprocess.run(
+        [str(python_bin), "-m", "pip", "install", "pytest", "-q"],
+        check=True,
+        cwd=workspace_path,
+        text=True,
+        capture_output=True,
+    )
+    # Install JS/TS dependencies if this is a JavaScript/TypeScript project.
+    _setup_js_dependencies(workspace_path)
     return str(python_bin)
+
+
+def _setup_js_dependencies(workspace_path: str) -> None:
+    """Install npm/pnpm dependencies when package.json is present."""
+    workspace = Path(workspace_path)
+    if not (workspace / "package.json").exists():
+        return
+    if shutil.which("pnpm") and (workspace / "pnpm-lock.yaml").exists():
+        cmd = ["pnpm", "install", "--frozen-lockfile"]
+    else:
+        cmd = ["npm", "install", "--legacy-peer-deps"]
+    subprocess.run(cmd, cwd=workspace_path, check=True, capture_output=True, text=True)
 
 
 def load_file_bundle(workspace_path: str, paths: list[str]) -> dict[str, str]:
@@ -287,7 +346,11 @@ def run_test_preflight(
         env=env,
     )
     parsed = _parse_preflight_output(result.stdout)
-    if result.returncode == 0 and parsed.get("passed", False):
+    # For pytest --collect-only the output is human-readable (not JSON), so
+    # parsed will be empty. A zero returncode from collect-only means tests
+    # were discovered successfully, which is all preflight needs to confirm.
+    preflight_passed = result.returncode == 0 and (parsed.get("passed", False) or not parsed)
+    if preflight_passed:
         return {
             "passed": True,
             "returncode": 0,

@@ -143,7 +143,7 @@ def diagnose_prompt(state: dict[str, Any], role: str) -> str:
     ).strip()
 
 
-def patch_prompt(state: dict[str, Any], role: str) -> str:
+def patch_prompt(state: dict[str, Any], role: str, strategy: str = "") -> str:
     if state.get("execution_mode") == "sandbox":
         editable = ", ".join(state.get("editable_files", []))
         return dedent(
@@ -189,6 +189,7 @@ def patch_prompt(state: dict[str, Any], role: str) -> str:
             - Match the style of the surrounding code.
             - Avoid placeholder comments or TODOs.
             - If an exact targeted edit is possible, prefer it over broad rewrites.
+            Implementation strategy for this branch: {strategy or "minimal — prefer the smallest correct change that makes the test pass."}
 
             {_engineering_standards()}
 
@@ -321,5 +322,39 @@ def review_prompt(state: dict[str, Any], role: str) -> str:
         Validation report: {state.get('validation_report', '')}
         Patch proposal:
         {state.get('current_patch', '')}
+        """
+    ).strip()
+
+
+def coordinator_decision_prompt(state: dict[str, Any], branch_results: list[dict[str, Any]]) -> str:
+    branches_block = ""
+    for br in branch_results:
+        branches_block += f"\n--- {br['branch_id']} ---\n"
+        branches_block += f"Validation passed: {br.get('validation_passed', False)}\n"
+        branches_block += f"Test return code: {br.get('test_returncode')}\n"
+        branches_block += f"Review: {br.get('review_recommendation', 'revise')}\n"
+        branches_block += f"Patch summary: {br.get('patch_summary', 'none')}\n"
+        branches_block += f"Changed files: {', '.join(br.get('changed_files', [])) or 'none'}\n"
+        branches_block += f"Review notes: {br.get('review_notes', 'none')}\n"
+    return dedent(
+        f"""
+        You are the Coordinator selecting the best engineer branch to ship.
+
+        Branch results:
+        {branches_block}
+        Rules:
+        - Prefer branches where validation passed and review recommends accept.
+        - If multiple branches passed, prefer the one with the most targeted, minimal change.
+        - If no branch passed, select the one most likely to succeed with a revision.
+
+        Respond in JSON only:
+        {{
+          "selected_branch_id": "engineer-N",
+          "reasoning": "one sentence explanation"
+        }}
+
+        {_engineering_standards()}
+
+        {_task_block(state)}
         """
     ).strip()
