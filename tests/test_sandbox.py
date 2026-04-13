@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from agentic_research.sandbox import (
     _build_preflight_command,
+    _has_dependency_group,
     _setup_cargo_dependencies,
     _uses_python_pytest,
     _validate_test_command_inputs,
@@ -127,6 +128,16 @@ class SandboxPreflightTests(unittest.TestCase):
         )
         self.assertFalse(_uses_python_pytest(["sh", "node_modules/.bin/jest", "test.tsx"]))
         self.assertFalse(_uses_python_pytest(["node", "node_modules/.bin/jest", "test.ts"]))
+
+    def test_dependency_group_detection_reads_pyproject(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            self.assertFalse(_has_dependency_group(root, "tests"))
+            (root / "pyproject.toml").write_text(
+                "[dependency-groups]\ntests = [\"pytest\"]\n"
+            )
+            self.assertTrue(_has_dependency_group(root, "tests"))
+            self.assertFalse(_has_dependency_group(root, "docs"))
 
 
 if __name__ == "__main__":

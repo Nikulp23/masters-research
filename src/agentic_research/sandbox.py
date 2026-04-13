@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -137,11 +138,16 @@ def setup_virtualenv(workspace_path: str, test_command: list[str] | None = None)
     python_bin = venv_dir / "bin" / "python"
     if not python_bin.exists():
         raise FileNotFoundError(f"Virtualenv python not found: {python_bin}")
+    installs_pytest_dependencies = False
     for metadata_file in ("pyproject.toml", "setup.py", "setup.cfg"):
         if (workspace / metadata_file).exists():
-            _run_setup_command([str(python_bin), "-m", "pip", "install", "-e", "."], workspace_path)
+            install_command = [str(python_bin), "-m", "pip", "install", "-e", "."]
+            if _uses_python_pytest(test_command or []) and _has_dependency_group(workspace, "tests"):
+                install_command.extend(["--group", "tests"])
+                installs_pytest_dependencies = True
+            _run_setup_command(install_command, workspace_path)
             break
-    if _uses_python_pytest(test_command or []):
+    if _uses_python_pytest(test_command or []) and not installs_pytest_dependencies:
         _run_setup_command([str(python_bin), "-m", "pip", "install", "pytest", "-q"], workspace_path)
     # Install JS/TS dependencies if this is a JavaScript/TypeScript project.
     _setup_js_dependencies(workspace_path)
@@ -164,6 +170,18 @@ def _setup_js_dependencies(workspace_path: str) -> None:
 
 def _uses_python_pytest(command: list[str]) -> bool:
     return len(command) >= 3 and command[0].startswith("python") and command[1:3] == ["-m", "pytest"]
+
+
+def _has_dependency_group(workspace: Path, group_name: str) -> bool:
+    pyproject = workspace / "pyproject.toml"
+    if not pyproject.exists():
+        return False
+    try:
+        data = tomllib.loads(pyproject.read_text())
+    except tomllib.TOMLDecodeError:
+        return False
+    groups = data.get("dependency-groups", {})
+    return isinstance(groups, dict) and group_name in groups
 
 
 def _setup_cargo_dependencies(workspace_path: str) -> None:
