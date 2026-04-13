@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import csv
 import json
+import warnings
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, date
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,40 @@ from .sample_tasks import SAMPLE_TASKS, get_task
 
 PROMPT_VERSION = "faang-v1"
 
+# Model training cutoff — bugs fixed on or before this date may be in training data.
+MODEL_TRAINING_CUTOFF = date(2025, 8, 1)
+
+
+def check_task_leakage(task: dict[str, Any]) -> None:
+    """Warn if a task's fix_date is within the model's training window."""
+    task_type = task.get("task_type", "synthetic")
+    fix_date_str = task.get("fix_date")
+
+    if task_type == "synthetic":
+        warnings.warn(
+            f"Task '{task['id']}' is synthetic — results reflect an artificial bug, "
+            "not real-world engineering performance.",
+            stacklevel=3,
+        )
+        return
+
+    if not fix_date_str:
+        warnings.warn(
+            f"Task '{task['id']}' is marked 'real' but has no fix_date. "
+            "Cannot verify the fix is post-training-cutoff.",
+            stacklevel=3,
+        )
+        return
+
+    fix_date = date.fromisoformat(fix_date_str)
+    if fix_date <= MODEL_TRAINING_CUTOFF:
+        warnings.warn(
+            f"Task '{task['id']}' fix_date {fix_date_str} is on or before the model training "
+            f"cutoff ({MODEL_TRAINING_CUTOFF}). The model may have seen this fix in training data. "
+            "Consider replacing with a more recent bug.",
+            stacklevel=3,
+        )
+
 
 @dataclass(frozen=True)
 class BenchmarkRunRecord:
@@ -23,6 +58,8 @@ class BenchmarkRunRecord:
     timestamp_utc: str
     task_id: str
     task_title: str
+    task_type: str
+    fix_date: str
     repository: str
     architecture: str
     workflow_label: str
@@ -42,7 +79,9 @@ class BenchmarkRunRecord:
     iterations: int
     revision_count: int
     llm_calls_used: int
+    tokens_used: int
     test_returncode: int | None
+    regression_passed: bool | None
     failure_category: str
     changed_files: list[str]
     validation_report: str
@@ -145,6 +184,8 @@ def _make_run_record(
         timestamp_utc=timestamp,
         task_id=task_id,
         task_title=task["title"],
+        task_type=task.get("task_type", "synthetic"),
+        fix_date=task.get("fix_date", ""),
         repository=task["repository"],
         architecture=architecture,
         workflow_label="single-agent baseline" if architecture == "single" else "multi-agent workflow",
@@ -164,7 +205,9 @@ def _make_run_record(
         iterations=int(metrics["iterations"]),
         revision_count=int(metrics["revision_count"]),
         llm_calls_used=int(metrics["llm_calls_used"]),
+        tokens_used=int(metrics.get("tokens_used", 0)),
         test_returncode=metrics.get("test_returncode"),
+        regression_passed=metrics.get("regression_passed"),
         failure_category=failure_category,
         changed_files=result.get("changed_files", []),
         validation_report=result["validation_report"],
@@ -201,6 +244,8 @@ def _write_summary_csv(path: Path, rows: list[BenchmarkRunRecord]) -> None:
         "timestamp_utc",
         "task_id",
         "task_title",
+        "task_type",
+        "fix_date",
         "repository",
         "architecture",
         "workflow_label",
@@ -220,7 +265,9 @@ def _write_summary_csv(path: Path, rows: list[BenchmarkRunRecord]) -> None:
         "iterations",
         "revision_count",
         "llm_calls_used",
+        "tokens_used",
         "test_returncode",
+        "regression_passed",
         "failure_category",
         "changed_files",
     ]
@@ -251,6 +298,7 @@ def _aggregate(rows: list[BenchmarkRunRecord]) -> dict[str, Any]:
                 "successes": 0,
                 "avg_latency_seconds": 0.0,
                 "avg_llm_calls_used": 0.0,
+                "avg_tokens_used": 0.0,
                 "failure_categories": {},
             },
         )
@@ -258,6 +306,7 @@ def _aggregate(rows: list[BenchmarkRunRecord]) -> dict[str, Any]:
         arch_bucket["successes"] += int(row.final_status == "success")
         arch_bucket["avg_latency_seconds"] += row.latency_seconds
         arch_bucket["avg_llm_calls_used"] += row.llm_calls_used
+        arch_bucket["avg_tokens_used"] += row.tokens_used
         arch_bucket["failure_categories"][row.failure_category] = (
             arch_bucket["failure_categories"].get(row.failure_category, 0) + 1
         )
@@ -268,6 +317,7 @@ def _aggregate(rows: list[BenchmarkRunRecord]) -> dict[str, Any]:
             arch_bucket["success_rate"] = arch_bucket["successes"] / runs if runs else 0.0
             arch_bucket["avg_latency_seconds"] = round(arch_bucket["avg_latency_seconds"] / runs, 6)
             arch_bucket["avg_llm_calls_used"] = round(arch_bucket["avg_llm_calls_used"] / runs, 3)
+            arch_bucket["avg_tokens_used"] = round(arch_bucket["avg_tokens_used"] / runs, 1)
 
     overall = {
         "total_runs": len(rows),
@@ -310,6 +360,7 @@ def run_benchmark_suite(
     _write_json(root / "manifest.json", manifest)
 
     for task_id in task_ids:
+        check_task_leakage(SAMPLE_TASKS[task_id])
         for repeat_index in range(repeats):
             for architecture in selected_architectures:
                 raw_result = run_architecture(architecture, task_id=task_id)
