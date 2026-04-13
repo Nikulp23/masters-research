@@ -18,9 +18,11 @@
       </a>
       <nav class="nav">
         <a href="index.html">Overview</a>
+        <a href="pipeline.html">Pipeline</a>
         <a href="results.html">Results</a>
         <a href="conversations.html">Conversations</a>
         <a href="tasks.html">Tasks</a>
+        <a href="#findings">Findings</a>
         <a href="#workflow">Workflow</a>
         <a href="#status">Status</a>
       </nav>
@@ -61,6 +63,42 @@
             </div>
           </div>
         </article>
+      </section>
+
+      <section class="panel" id="findings">
+        <p class="eyebrow">Key Findings</p>
+        <h2>What the data shows</h2>
+        <p>
+          Across 16 runs on 4 fixture tasks (2 architectures &times; 2 repeats each), both systems achieved
+          a 100% success rate. The main differentiation is in resource cost.
+        </p>
+        <div class="triple-grid" style="margin-top: 24px;">
+          <article class="stat-card">
+            <span class="stat-label">Mean latency overhead</span>
+            <strong class="stat-value">+38%</strong>
+            <p>Multi-agent averages 17.7s vs single-agent&rsquo;s 12.8s. The gap ranges from 1% (tag-parser) to 65% (no-color) depending on the task.</p>
+          </article>
+          <article class="stat-card">
+            <span class="stat-label">LLM call overhead</span>
+            <strong class="stat-value">+67%</strong>
+            <p>Single-agent uses 3 calls per run. Multi-agent uses 5, reflecting the additional Analyst, Tester, and Reviewer roles.</p>
+          </article>
+          <article class="stat-card">
+            <span class="stat-label">Success rate</span>
+            <strong class="stat-value">100% / 100%</strong>
+            <p>Both architectures solved all fixture tasks on every run, establishing a clean correctness baseline for comparison.</p>
+          </article>
+        </div>
+        <p style="margin-top: 20px; color: var(--muted); font-size: 0.96rem;">
+          <strong>Interpretation:</strong> On straightforward, well-scoped tasks, multi-agent coordination adds overhead
+          without a correctness benefit. The hypothesis is that harder tasks&mdash;with ambiguity, conflicting constraints,
+          or multi-file scope&mdash;would surface a quality advantage for multi-agent that exceeds this coordination cost.
+          These fixture results quantify the baseline cost any such benefit would need to exceed.
+        </p>
+        <div style="margin-top: 18px;">
+          <a class="button button-primary" href="results.html#charts">View Charts</a>
+          <a class="button button-secondary" href="results.html" style="margin-left: 12px;">Full Results</a>
+        </div>
       </section>
 
       <section class="panel" id="workflow">

@@ -1,3 +1,14 @@
+const T_TABLE = { 1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365 };
+
+function ciHalfWidth(values) {
+  if (values.length < 2) return null;
+  const n = values.length;
+  const mean = values.reduce((s, v) => s + v, 0) / n;
+  const std = Math.sqrt(values.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1));
+  const t = T_TABLE[n - 1] || 1.96;
+  return (t * std) / Math.sqrt(n);
+}
+
 (function () {
   const data = window.AGENTIC_CONVERSATIONS || { issues: [] };
   const summaryRoot = document.getElementById("results-summary");
@@ -85,7 +96,12 @@
     }
 
     const successes = runs.filter((run) => run.final_status === "success").length;
-    const avgLatency = runs.reduce((sum, run) => sum + Number(run.latency_seconds || 0), 0) / runs.length;
+    const latencyVals = runs.map((run) => Number(run.latency_seconds || 0));
+    const avgLatencyRaw = latencyVals.reduce((sum, v) => sum + v, 0) / runs.length;
+    const latencyCi = ciHalfWidth(latencyVals);
+    const avgLatency = latencyCi !== null
+      ? `${avgLatencyRaw.toFixed(2)}s \u00b1 ${latencyCi.toFixed(2)}s (95% CI)`
+      : `${avgLatencyRaw.toFixed(2)}s`;
     const avgIterations = runs.reduce((sum, run) => sum + Number(run.iterations || 0), 0) / runs.length;
     const avgLlmCalls = runs.reduce((sum, run) => sum + Number(run.llm_calls_used || 0), 0) / runs.length;
     const failureCounts = {};
@@ -108,6 +124,131 @@
       avgIterations: avgIterations.toFixed(2),
       avgLlmCalls: avgLlmCalls.toFixed(2),
     };
+  }
+
+  function renderCharts() {
+    const cd = window.AGENTIC_CHART_DATA;
+    if (!cd) return;
+
+    const SINGLE_COLOR  = "rgba(15, 118, 110, 0.75)";
+    const MULTI_COLOR   = "rgba(29, 78, 216, 0.75)";
+    const SINGLE_BORDER = "rgba(15, 118, 110, 1)";
+    const MULTI_BORDER  = "rgba(29, 78, 216, 1)";
+
+    // Latency bar chart
+    new Chart(document.getElementById("chart-latency"), {
+      type: "bar",
+      data: {
+        labels: cd.taskLabels,
+        datasets: [
+          {
+            label: "Single-agent",
+            data: cd.latency.single.means,
+            backgroundColor: SINGLE_COLOR,
+            borderColor: SINGLE_BORDER,
+            borderWidth: 1.5,
+            borderRadius: 6,
+          },
+          {
+            label: "Multi-agent",
+            data: cd.latency.multi.means,
+            backgroundColor: MULTI_COLOR,
+            borderColor: MULTI_BORDER,
+            borderWidth: 1.5,
+            borderRadius: 6,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { position: "bottom" },
+          tooltip: {
+            callbacks: {
+              afterLabel: (ctx) => {
+                const arch = ctx.datasetIndex === 0 ? "single" : "multi";
+                const ci = cd.latency[arch].ci[ctx.dataIndex];
+                return ci !== null ? `95% CI: \u00b1${ci.toFixed(2)}s` : "";
+              },
+            },
+          },
+        },
+        scales: {
+          y: { beginAtZero: true, title: { display: true, text: "Seconds" } },
+        },
+      },
+    });
+
+    // LLM calls bar chart
+    new Chart(document.getElementById("chart-llm"), {
+      type: "bar",
+      data: {
+        labels: cd.taskLabels,
+        datasets: [
+          {
+            label: "Single-agent",
+            data: cd.llmCalls.single.means,
+            backgroundColor: SINGLE_COLOR,
+            borderColor: SINGLE_BORDER,
+            borderWidth: 1.5,
+            borderRadius: 6,
+          },
+          {
+            label: "Multi-agent",
+            data: cd.llmCalls.multi.means,
+            backgroundColor: MULTI_COLOR,
+            borderColor: MULTI_BORDER,
+            borderWidth: 1.5,
+            borderRadius: 6,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { position: "bottom" } },
+        scales: {
+          y: {
+            beginAtZero: true,
+            ticks: { stepSize: 1 },
+            title: { display: true, text: "LLM calls" },
+          },
+        },
+      },
+    });
+
+    // Success rate horizontal bar chart
+    new Chart(document.getElementById("chart-success"), {
+      type: "bar",
+      data: {
+        labels: cd.taskLabels,
+        datasets: [
+          {
+            label: "Single-agent",
+            data: cd.successRate.single.map((v) => (v * 100).toFixed(0)),
+            backgroundColor: SINGLE_COLOR,
+            borderRadius: 6,
+          },
+          {
+            label: "Multi-agent",
+            data: cd.successRate.multi.map((v) => (v * 100).toFixed(0)),
+            backgroundColor: MULTI_COLOR,
+            borderRadius: 6,
+          },
+        ],
+      },
+      options: {
+        indexAxis: "y",
+        responsive: true,
+        plugins: { legend: { position: "bottom" } },
+        scales: {
+          x: {
+            beginAtZero: true,
+            max: 100,
+            title: { display: true, text: "Success %" },
+          },
+        },
+      },
+    });
   }
 
   function renderSummary() {
@@ -242,6 +383,7 @@
     testsRoot.innerHTML = `<div class="accordion-list">${data.issues.map(renderIssueCard).join("")}</div>`;
   }
 
+  renderCharts();
   renderSummary();
   renderTests();
 })();
