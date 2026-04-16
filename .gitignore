@@ -3,3 +3,8 @@ __pycache__/
 *.pyc
 benchmark_runs/
 site-data/
+*.egg-info/
+repos/
+HOW_TO_RUN.txt
+tasks.txt
+analysis/
