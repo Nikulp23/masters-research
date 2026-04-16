@@ -64,6 +64,18 @@ raise SystemExit(main())
 """
 
 
+def _git_baseline(workspace_path: str) -> None:
+    """Init a git repo and create a baseline commit so `git diff` has a tree to compare."""
+    env = {**os.environ, "GIT_AUTHOR_NAME": "baseline", "GIT_AUTHOR_EMAIL": "baseline@agent",
+           "GIT_COMMITTER_NAME": "baseline", "GIT_COMMITTER_EMAIL": "baseline@agent"}
+    for cmd in (
+        ["git", "init"],
+        ["git", "add", "-A"],
+        ["git", "commit", "-m", "baseline", "--allow-empty"],
+    ):
+        subprocess.run(cmd, cwd=workspace_path, capture_output=True, env=env)
+
+
 def create_workspace(task: dict[str, Any]) -> str:
     fixture_dir = task.get("fixture_dir")
     source_repo_path = task.get("source_repo_path")
@@ -103,6 +115,13 @@ def create_workspace(task: dict[str, Any]) -> str:
         target = workspace / relative_path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content)
+
+    # Ensure a baseline git commit exists so `git diff` in _execute_real_patch
+    # has a tree to compare against.  When a base_commit is present the .git dir
+    # was already copied above and HEAD is already set; skip in that case.
+    if not (workspace / ".git").exists():
+        _git_baseline(str(workspace))
+
     return str(workspace)
 
 

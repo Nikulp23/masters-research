@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import re
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from time import perf_counter
@@ -26,13 +29,33 @@ from .state import AgentState, build_initial_state
 from .transcript import append_transcript_entry
 
 MULTI_WORKFLOW_ROLE_COUNT = 5
+_TEST_OUTPUT_HEAD_LINES = 80
+_TEST_OUTPUT_TAIL_LINES = 80
 
 ENGINEER_STRATEGIES = [
-    "minimal — make the smallest, most targeted change that passes the test. Touch only what is broken.",
-    "defensive — add guards, validate inputs, and handle edge cases explicitly. Keep scope bounded but thorough.",
+    "minimal-surgical — the smallest possible diff at the exact failure site. Touch only what is broken. Prefer a single-line or single-expression fix. Do NOT refactor adjacent code even if it looks suspicious.",
+    "defensive-root-cause — address the underlying root cause even if it requires touching adjacent code. If the bug is a symptom of a broader invariant violation, fix the invariant. Prefer correctness over minimalism.",
 ]
 
 
+
+
+def _trim_test_output(text: str, head: int = _TEST_OUTPUT_HEAD_LINES, tail: int = _TEST_OUTPUT_TAIL_LINES) -> str:
+    """Trim long test output to head+tail lines with a marker in between."""
+    if not text:
+        return text
+    lines = text.splitlines()
+    if len(lines) <= head + tail:
+        return text
+    omitted = len(lines) - head - tail
+    return "\n".join(lines[:head] + [f"... truncated {omitted} lines ..."] + lines[-tail:])
+
+
+def _truncate_messages(messages: list[dict[str, Any]], k: int) -> list[dict[str, Any]]:
+    """Return the last k messages, preserving all if k <= 0."""
+    if k <= 0 or len(messages) <= k:
+        return messages
+    return messages[-k:]
 
 
 def _branch_sort_key(branch: dict[str, Any]) -> tuple[int, int, int, str]:
@@ -243,14 +266,26 @@ def _execute_real_patch(state: AgentState, patch_payload: str, role: str) -> Age
         },
     )
     repo_paths = state["editable_files"] + state["readonly_files"]
+    try:
+        diff_result = subprocess.run(
+            ["git", "diff", "--no-color", "--unified=3"],
+            cwd=state["workspace_path"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        patch_diff = diff_result.stdout
+    except Exception:
+        patch_diff = ""
     return {
         "current_patch": patch_payload,
         "patch_summary": summary,
+        "patch_diff": patch_diff,
         "changed_files": changed_files,
         "validation_passed": test_result["passed"],
         "test_returncode": test_result["returncode"],
-        "test_stdout": test_result["stdout"],
-        "test_stderr": test_result["stderr"],
+        "test_stdout": _trim_test_output(test_result["stdout"]),
+        "test_stderr": _trim_test_output(test_result["stderr"]),
         "regression_passed": regression_passed,
         "regression_returncode": regression_returncode,
         "repo_context": load_existing_file_bundle(state["workspace_path"], repo_paths),
@@ -322,9 +357,18 @@ def _deterministic_review(state: AgentState, role: str) -> tuple[Literal["accept
         notes = f"{role} review: revise because no code change was applied in the sandbox."
         recommendation = "revise"
     else:
+        regression_note = ""
+        if state.get("regression_passed") is False:
+            regression_note = (
+                f" WARNING: regression suite returned code {state.get('regression_returncode')} "
+                f"— verify this is not caused by the patch."
+            )
+        elif state.get("regression_passed") is True:
+            regression_note = " Regression suite also passed."
         notes = (
             f"{role} review: accept because the patch stayed scoped to "
             f"{', '.join(state.get('changed_files', []))} and the real test passed."
+            + regression_note
         )
         recommendation = "accept"
     append_transcript_entry(
@@ -355,6 +399,78 @@ def _progress_signature(state: AgentState) -> str:
     )
 
 
+def _build_structured_feedback(state: AgentState, validation_report: str, review_notes: str) -> str:
+    """Return JSON-encoded feedback so the next patch attempt has structured context."""
+    feedback: dict[str, Any] = {
+        "failed_approach": state.get("patch_summary", ""),
+        "specific_error": (state.get("test_stderr") or state.get("test_stdout") or "")[:500],
+        "validation_report": validation_report,
+        "avoid": review_notes,
+    }
+    if state.get("regression_passed") is False and state.get("regression_returncode") is not None:
+        feedback["regression_warning"] = (
+            f"Regression suite returned code {state.get('regression_returncode')} — "
+            "check if this pre-existed before the patch before broadening scope."
+        )
+    return json.dumps(feedback)
+
+
+def _narrow_repo_context_from_diagnosis(
+    root_cause: str,
+    workspace_path: str,
+    existing_context: dict[str, str],
+) -> dict[str, str]:
+    """
+    Parse Target-File / Target-Function hints from the diagnosis and, if the
+    identified file is not already in the context, grep the workspace for it
+    and add its content.  Returns an updated context dict (never removes entries).
+    """
+    if not workspace_path:
+        return existing_context
+
+    target_file: str | None = None
+    target_func: str | None = None
+    for line in root_cause.splitlines():
+        m = re.match(r"Target-File:\s*(.+)", line.strip())
+        if m:
+            target_file = m.group(1).strip()
+        m = re.match(r"Target-Function:\s*(.+)", line.strip())
+        if m:
+            target_func = m.group(1).strip()
+
+    updated = dict(existing_context)
+
+    # Load the explicitly identified file if not already present.
+    if target_file and target_file not in updated:
+        candidate = Path(workspace_path) / target_file
+        if candidate.is_file():
+            try:
+                updated[target_file] = candidate.read_text(errors="replace")
+            except OSError:
+                pass
+
+    # If we have a function name but couldn't derive the file, grep for it.
+    if target_func and not target_file:
+        try:
+            result = subprocess.run(
+                ["grep", "-rl", target_func, workspace_path],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            for hit in result.stdout.splitlines()[:3]:
+                rel = str(Path(hit).relative_to(workspace_path))
+                if rel not in updated:
+                    try:
+                        updated[rel] = Path(hit).read_text(errors="replace")
+                    except OSError:
+                        pass
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+
+    return updated
+
+
 def _single_cycle(state: AgentState, brain: BrainProtocol) -> AgentState:
     next_iteration = state["iteration_count"] + 1
     working_state: AgentState = {**state, "iteration_count": next_iteration}
@@ -365,6 +481,12 @@ def _single_cycle(state: AgentState, brain: BrainProtocol) -> AgentState:
         working_state["active_role"] = "Single Agent"
         root_cause = brain.diagnose_root_cause(working_state, "Single Agent")
         working_state["root_cause"] = root_cause
+        if state.get("execution_mode") == "sandbox" and working_state.get("workspace_path"):
+            working_state["repo_context"] = _narrow_repo_context_from_diagnosis(
+                root_cause,
+                working_state["workspace_path"],
+                working_state.get("repo_context", {}),
+            )
         working_state["active_role"] = "Single Agent"
         patch = brain.propose_patch(working_state, "Single Agent")
     except Exception as exc:
@@ -393,6 +515,7 @@ def _single_cycle(state: AgentState, brain: BrainProtocol) -> AgentState:
         "root_cause": root_cause,
         "llm_calls_used": working_state["llm_calls_used"],
         "tokens_used": working_state.get("tokens_used", 0),
+        "tokens_by_role": working_state.get("tokens_by_role") or {},
         "messages": working_state.get("messages", state.get("messages", [])),
         "transcript": working_state.get("transcript", []),
     }
@@ -437,7 +560,7 @@ def _single_cycle(state: AgentState, brain: BrainProtocol) -> AgentState:
     signature = _progress_signature({**state, **working})
     repeated_no_progress = not success and state.get("last_progress_signature") == signature
     no_progress_count = state.get("no_progress_count", 0) + 1 if repeated_no_progress else 0
-    stalled_out = no_progress_count >= 3
+    stalled_out = no_progress_count >= 2
     exceeded = (
         next_iteration >= state["max_iterations"]
         or state["revision_count"] >= state["max_revision_rounds"]
@@ -456,11 +579,15 @@ def _single_cycle(state: AgentState, brain: BrainProtocol) -> AgentState:
         if stalled_out:
             working["latest_feedback"] = "Single Agent made no progress after repeated attempts."
         else:
-            working["latest_feedback"] = review_notes if not passed else validation_report
+            working["latest_feedback"] = _build_structured_feedback(
+                {**state, **working}, validation_report, review_notes
+            )
     else:
         working["final_status"] = "in_progress"
         working["revision_count"] = state["revision_count"] + 1
-        working["latest_feedback"] = f"{validation_report} {review_notes}"
+        working["latest_feedback"] = _build_structured_feedback(
+            {**state, **working}, validation_report, review_notes
+        )
 
     log_message = (
         f"validation={'pass' if passed else 'fail'}; "
@@ -492,6 +619,7 @@ def _coordinator(state: AgentState, brain: BrainProtocol) -> AgentState:
         "coordinator_plan": coordinator_plan,
         "llm_calls_used": working_state["llm_calls_used"],
         "tokens_used": working_state.get("tokens_used", 0),
+        "tokens_by_role": working_state.get("tokens_by_role") or {},
         "messages": working_state.get("messages", state.get("messages", [])),
         "transcript": working_state.get("transcript", state.get("transcript", [])),
         "logs": state["logs"] + [build_log_entry("coordinator", state, log_message)],
@@ -509,6 +637,12 @@ def _analyst(state: AgentState, brain: BrainProtocol) -> AgentState:
         working_state["active_role"] = "Analyst"
         diagnosis = brain.diagnose_root_cause(working_state, "Analyst")
         working_state["root_cause"] = diagnosis
+        if state.get("execution_mode") == "sandbox" and working_state.get("workspace_path"):
+            working_state["repo_context"] = _narrow_repo_context_from_diagnosis(
+                diagnosis,
+                working_state["workspace_path"],
+                working_state.get("repo_context", {}),
+            )
     except Exception as exc:
         return {
             "iteration_count": next_iteration,
@@ -522,6 +656,7 @@ def _analyst(state: AgentState, brain: BrainProtocol) -> AgentState:
             "test_stderr": f"Analyst failure: {exc}",
             "llm_calls_used": working_state["llm_calls_used"],
         "tokens_used": working_state.get("tokens_used", 0),
+        "tokens_by_role": working_state.get("tokens_by_role") or {},
             "messages": working_state.get("messages", state.get("messages", [])),
             "transcript": working_state.get("transcript", state.get("transcript", [])),
             "logs": state["logs"] + [
@@ -535,18 +670,22 @@ def _analyst(state: AgentState, brain: BrainProtocol) -> AgentState:
         kind="status",
         content=diagnosis,
     )
-    return {
+    update: dict[str, Any] = {
         "iteration_count": next_iteration,
         "issue_summary": issue_summary,
         "root_cause": diagnosis,
         "llm_calls_used": working_state["llm_calls_used"],
         "tokens_used": working_state.get("tokens_used", 0),
+        "tokens_by_role": working_state.get("tokens_by_role") or {},
         "messages": working_state.get("messages", state.get("messages", [])),
         "transcript": working_state.get("transcript", state.get("transcript", [])),
         "logs": state["logs"] + [
             build_log_entry("analyst", {**state, "iteration_count": next_iteration}, "Prepared issue summary and root-cause analysis.")
         ],
     }
+    if working_state.get("repo_context") is not state.get("repo_context"):
+        update["repo_context"] = working_state["repo_context"]
+    return update
 
 
 def _engineer(state: AgentState, brain: BrainProtocol, strategy: str = "") -> AgentState:
@@ -565,6 +704,7 @@ def _engineer(state: AgentState, brain: BrainProtocol, strategy: str = "") -> Ag
             "test_stderr": f"Engineer failure: {exc}",
             "llm_calls_used": working_state["llm_calls_used"],
         "tokens_used": working_state.get("tokens_used", 0),
+        "tokens_by_role": working_state.get("tokens_by_role") or {},
             "messages": working_state.get("messages", state.get("messages", [])),
             "transcript": working_state.get("transcript", state.get("transcript", [])),
             "logs": state["logs"] + [
@@ -574,6 +714,7 @@ def _engineer(state: AgentState, brain: BrainProtocol, strategy: str = "") -> Ag
     update: AgentState = {
         "llm_calls_used": working_state["llm_calls_used"],
         "tokens_used": working_state.get("tokens_used", 0),
+        "tokens_by_role": working_state.get("tokens_by_role") or {},
         "messages": working_state.get("messages", state.get("messages", [])),
         "transcript": working_state.get("transcript", state.get("transcript", [])),
         "logs": state["logs"] + [
@@ -606,6 +747,7 @@ def _tester(state: AgentState, brain: BrainProtocol) -> AgentState:
         "validation_report": report,
         "llm_calls_used": working_state["llm_calls_used"],
         "tokens_used": working_state.get("tokens_used", 0),
+        "tokens_by_role": working_state.get("tokens_by_role") or {},
         "messages": working_state.get("messages", state.get("messages", [])),
         "transcript": working_state.get("transcript", state.get("transcript", [])),
         "logs": state["logs"] + [
@@ -629,6 +771,7 @@ def _reviewer(state: AgentState, brain: BrainProtocol) -> AgentState:
         "review_notes": notes,
         "llm_calls_used": working_state["llm_calls_used"],
         "tokens_used": working_state.get("tokens_used", 0),
+        "tokens_by_role": working_state.get("tokens_by_role") or {},
         "messages": working_state.get("messages", state.get("messages", [])),
         "transcript": working_state.get("transcript", state.get("transcript", [])),
         "logs": state["logs"] + [
@@ -700,14 +843,16 @@ def _run_engineer_branch(
 
 def _engineer_fanout(state: AgentState, worker_brains: dict[str, Any]) -> AgentState:
     engineer_brains = worker_brains["engineers"]
+    testers = worker_brains["testers"]
+    reviewers = worker_brains["reviewers"]
     with ThreadPoolExecutor(max_workers=len(engineer_brains)) as executor:
         futures = [
             executor.submit(
                 _run_engineer_branch,
                 state,
                 engineer_brain,
-                worker_brains["tester"],
-                worker_brains["reviewer"],
+                testers[index],
+                reviewers[index],
                 index,
             )
             for index, engineer_brain in enumerate(engineer_brains)
@@ -725,6 +870,8 @@ def _engineer_fanout(state: AgentState, worker_brains: dict[str, Any]) -> AgentS
         selected_branch = _select_branch_result(branch_results)
         selection_reasoning = "Coordinator branch decision failed; fell back to deterministic selection."
     llm_calls_used = state.get("llm_calls_used", 0) + sum(branch.get("llm_calls_used", 0) for branch in branch_results)
+    tokens_used = state.get("tokens_used", 0) + sum(branch.get("tokens_used", 0) for branch in branch_results)
+    cached_tokens = state.get("cached_tokens", 0) + sum(branch.get("cached_tokens", 0) for branch in branch_results)
     merged_messages = _merge_messages(
         state.get("messages", []),
         *[branch.get("messages", []) for branch in branch_results],
@@ -763,6 +910,8 @@ def _engineer_fanout(state: AgentState, worker_brains: dict[str, Any]) -> AgentS
         "test_stdout": selected_branch.get("test_stdout", ""),
         "test_stderr": selected_branch.get("test_stderr", ""),
         "llm_calls_used": llm_calls_used,
+        "tokens_used": tokens_used,
+        "cached_tokens": cached_tokens,
         "messages": _merge_messages(merged_messages, fanout_state.get("messages", [])),
         "transcript": fanout_state.get("transcript", state.get("transcript", [])),
         "logs": state["logs"] + [build_log_entry("engineer_fanout", state, f"Ran {len(branch_results)} engineer branches concurrently.")],
@@ -775,7 +924,7 @@ def _coordinator_decide(state: AgentState) -> AgentState:
     signature = _progress_signature(state)
     repeated_no_progress = not success and state.get("last_progress_signature") == signature
     no_progress_count = state.get("no_progress_count", 0) + 1 if repeated_no_progress else 0
-    stalled_out = no_progress_count >= 3
+    stalled_out = no_progress_count >= 2
     exceeded = (
         state["iteration_count"] >= state["max_iterations"]
         or state["revision_count"] >= state["max_revision_rounds"]
@@ -793,11 +942,15 @@ def _coordinator_decide(state: AgentState) -> AgentState:
         if stalled_out:
             latest_feedback = "Coordinator can't figure this out after repeated no-progress revisions."
         else:
-            latest_feedback = f"{state['validation_report']} {state['review_notes']}"
+            latest_feedback = _build_structured_feedback(
+                state, state["validation_report"], state["review_notes"]
+            )
     else:
         status = "in_progress"
         revision_count = state["revision_count"] + 1
-        latest_feedback = f"{state['validation_report']} {state['review_notes']}"
+        latest_feedback = _build_structured_feedback(
+            state, state["validation_report"], state["review_notes"]
+        )
 
     decision_state: AgentState = {**state}
     append_transcript_entry(
@@ -896,6 +1049,7 @@ def run_architecture(
         max_iterations=config.max_iterations,
         max_revision_rounds=config.max_revision_rounds,
         max_llm_calls=max_llm_calls,
+        transcript_tail_k=config.transcript_tail_k,
     )
     initial_state.update(_prepare_execution_state(task, initial_state))
     preflight_failure = _run_harness_preflight(task, initial_state)
@@ -908,6 +1062,7 @@ def run_architecture(
             "success": False,
             "llm_calls_used": final_state["llm_calls_used"],
             "tokens_used": final_state.get("tokens_used", 0),
+            "tokens_by_role": final_state.get("tokens_by_role") or {},
             "max_llm_calls": final_state["max_llm_calls"],
             "test_returncode": final_state.get("test_returncode"),
             "simulated_cost_units": 0,
@@ -929,6 +1084,8 @@ def run_architecture(
         "success": final_state["final_status"] == "success",
         "llm_calls_used": final_state["llm_calls_used"],
         "tokens_used": final_state.get("tokens_used", 0),
+        "cached_tokens": final_state.get("cached_tokens", 0),
+        "tokens_by_role": final_state.get("tokens_by_role") or {},
         "max_llm_calls": final_state["max_llm_calls"],
         "test_returncode": final_state.get("test_returncode"),
         "regression_passed": final_state.get("regression_passed"),

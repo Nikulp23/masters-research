@@ -32,6 +32,7 @@ class AgentState(TypedDict, total=False):
     root_cause: str
     current_patch: str
     patch_summary: str
+    patch_diff: str
     changed_files: list[str]
     validation_passed: bool
     validation_report: str
@@ -57,7 +58,10 @@ class AgentState(TypedDict, total=False):
     max_revision_rounds: int
     llm_calls_used: int
     tokens_used: int
+    cached_tokens: int
+    tokens_by_role: dict[str, int]
     max_llm_calls: int
+    transcript_tail_k: int
     final_status: Status
     logs: list[dict[str, Any]]
     transcript: list[dict[str, Any]]
@@ -70,6 +74,7 @@ def build_initial_state(
     max_iterations: int = 50,
     max_revision_rounds: int = 30,
     max_llm_calls: int = 0,
+    transcript_tail_k: int = 6,
 ) -> AgentState:
     return {
         "task_id": task["id"],
@@ -96,6 +101,7 @@ def build_initial_state(
         "root_cause": "",
         "current_patch": "",
         "patch_summary": "",
+        "patch_diff": "",
         "changed_files": [],
         "validation_passed": False,
         "validation_report": "",
@@ -121,7 +127,10 @@ def build_initial_state(
         "max_revision_rounds": max_revision_rounds,
         "llm_calls_used": 0,
         "tokens_used": 0,
+        "cached_tokens": 0,
+        "tokens_by_role": {},
         "max_llm_calls": max_llm_calls,
+        "transcript_tail_k": transcript_tail_k,
         "final_status": "in_progress",
         "logs": [],
         "transcript": [],

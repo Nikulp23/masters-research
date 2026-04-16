@@ -35,10 +35,6 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["deterministic", "openai"],
         help="Override AGENTIC_MODE for this benchmark suite.",
     )
-    parser.add_argument(
-        "--output-dir",
-        help="Optional output directory for benchmark artifacts. Defaults to benchmark_runs/<suite-id>.",
-    )
     return parser
 
 
@@ -50,7 +46,6 @@ def main() -> None:
         task_ids=args.tasks,
         repeats=args.repeats,
         architectures=args.architectures,
-        output_dir=args.output_dir,
     )
     print(json.dumps(result, indent=2))
 

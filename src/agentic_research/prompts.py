@@ -1,7 +1,32 @@
 from __future__ import annotations
 
+import json
 from textwrap import dedent
 from typing import Any
+
+
+def _format_feedback(feedback: str) -> str:
+    """Render structured feedback (JSON dict) as a readable block, or return as-is."""
+    if not feedback:
+        return "None"
+    try:
+        data = json.loads(feedback)
+        if isinstance(data, dict):
+            lines = []
+            if data.get("failed_approach"):
+                lines.append(f"Previous patch: {data['failed_approach']}")
+            if data.get("specific_error"):
+                lines.append(f"Error: {data['specific_error']}")
+            if data.get("validation_report"):
+                lines.append(f"Validation: {data['validation_report']}")
+            if data.get("avoid"):
+                lines.append(f"Avoid: {data['avoid']}")
+            if data.get("regression_failure"):
+                lines.append(f"Regression: {data['regression_failure']}")
+            return "\n".join(lines) if lines else feedback
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return feedback
 
 
 def _engineering_standards() -> str:
@@ -18,11 +43,15 @@ def _engineering_standards() -> str:
     ).strip()
 
 
-def _task_block(state: dict[str, Any]) -> str:
+def _task_block(state: dict[str, Any], include_variable: bool = True) -> str:
+    """Stable task description block.
+
+    When include_variable=False, omits feedback and team messages so the block
+    can form a cacheable prefix. Variable data is then appended at the call site.
+    """
     constraints = "\n".join(f"- {item}" for item in state["constraints"])
     keywords = ", ".join(state["acceptance_keywords"])
-    feedback = state.get("latest_feedback") or "None"
-    return dedent(
+    base = dedent(
         f"""
         Task ID: {state['task_id']}
         Title: {state['title']}
@@ -33,7 +62,14 @@ def _task_block(state: dict[str, Any]) -> str:
         {constraints}
         Acceptance keywords: {keywords}
         Validation instructions: {state['validation_instructions']}
-        Latest feedback: {feedback}
+        """
+    ).strip()
+    if not include_variable:
+        return base
+    feedback = state.get("latest_feedback") or "None"
+    return base + "\n" + dedent(
+        f"""
+        Latest feedback: {_format_feedback(feedback)}
         {_team_messages_block(state)}
         """
     ).strip()
@@ -68,7 +104,8 @@ def _team_messages_block(state: dict[str, Any]) -> str:
         recipient = item.get("recipient", "")
         if recipient in {"", "all", role} or item.get("sender") == role:
             relevant.append(item)
-    relevant = relevant[-8:]
+    k = state.get("transcript_tail_k", 8)
+    relevant = relevant[-k:]
     if not relevant:
         return "Relevant team messages: None"
     lines = []
@@ -83,9 +120,11 @@ def _team_messages_block(state: dict[str, Any]) -> str:
 
 
 def summarize_prompt(state: dict[str, Any], role: str) -> str:
+    # Stable prefix: role + standards + stable task block
+    # Variable suffix: feedback + messages
     return dedent(
         f"""
-        You are the {role} on a FAANG-style software engineering team.
+        You are the {role} on a software engineering team.
         Your job is to brief the team on the issue before implementation starts.
 
         Requirements:
@@ -97,7 +136,10 @@ def summarize_prompt(state: dict[str, Any], role: str) -> str:
 
         {_engineering_standards()}
 
-        {_task_block(state)}
+        {_task_block(state, include_variable=False)}
+
+        Latest feedback: {_format_feedback(state.get('latest_feedback') or 'None')}
+        {_team_messages_block(state)}
         """
     ).strip()
 
@@ -118,7 +160,10 @@ def coordinator_plan_prompt(state: dict[str, Any]) -> str:
 
         {_engineering_standards()}
 
-        {_task_block(state)}
+        {_task_block(state, include_variable=False)}
+
+        Latest feedback: {_format_feedback(state.get('latest_feedback') or 'None')}
+        {_team_messages_block(state)}
         """
     ).strip()
 
@@ -126,7 +171,7 @@ def coordinator_plan_prompt(state: dict[str, Any]) -> str:
 def diagnose_prompt(state: dict[str, Any], role: str) -> str:
     return dedent(
         f"""
-        You are the {role} on a FAANG-style engineering team.
+        You are the {role} on an engineering team.
         Your responsibility is root-cause analysis, not broad brainstorming.
 
         Requirements:
@@ -135,10 +180,16 @@ def diagnose_prompt(state: dict[str, Any], role: str) -> str:
         - Distinguish between symptom and root cause.
         - Keep the diagnosis bounded to the task.
         - Do not propose unrelated cleanup or redesign.
+        - End your response with exactly two lines in this format (fill in real values):
+          Target-File: <relative/path/to/file>
+          Target-Function: <function_or_method_name>
 
         {_engineering_standards()}
 
-        {_task_block(state)}
+        {_task_block(state, include_variable=False)}
+
+        Latest feedback: {_format_feedback(state.get('latest_feedback') or 'None')}
+        {_team_messages_block(state)}
         """
     ).strip()
 
@@ -146,21 +197,14 @@ def diagnose_prompt(state: dict[str, Any], role: str) -> str:
 def patch_prompt(state: dict[str, Any], role: str, strategy: str = "") -> str:
     if state.get("execution_mode") == "sandbox":
         editable = ", ".join(state.get("editable_files", []))
+        # Stable prefix: role + output format rules + standards + task spec + repo context
+        # Variable suffix: root cause + feedback + messages (changes each iteration)
         return dedent(
             f"""
-            You are the {role} on a FAANG-style engineering team.
+            You are the {role} on an engineering team.
             You own implementation. You must produce an actual patch for a real repository sandbox.
 
-            Output JSON only. Use one of these exact shapes:
-            {{
-              "summary": "short patch summary",
-              "files": {{
-                "relative/path.py": "full new file content"
-              }}
-            }}
-
-            or
-
+            Output JSON only. Use this exact shape:
             {{
               "summary": "short patch summary",
               "edits": [
@@ -174,8 +218,11 @@ def patch_prompt(state: dict[str, Any], role: str, strategy: str = "") -> str:
 
             Rules:
             - Only edit these files: {editable}
-            - For very large files, prefer "edits" with exact find/replace blocks.
-            - If you use "files", return full replacement content for each edited file.
+            - You MUST use the "edits" shape. Do NOT return full file contents under any key.
+            - Each "find" string must be SHORT — include only the lines that actually change plus 1-2 lines of surrounding context for uniqueness. Never include whole functions or whole files.
+            - If multiple disjoint regions need changing, emit multiple entries in the "edits" array.
+            - "find" must match the file byte-for-byte (including whitespace). Do not paraphrase.
+            - Keep the total JSON response small enough to fit well under the token limit.
             - Keep the patch minimal and bounded.
             - Use the latest feedback if present.
             - Make the real test command pass.
@@ -189,20 +236,24 @@ def patch_prompt(state: dict[str, Any], role: str, strategy: str = "") -> str:
             - Match the style of the surrounding code.
             - Avoid placeholder comments or TODOs.
             - If an exact targeted edit is possible, prefer it over broad rewrites.
+            - Keep "find" and "replace" strings as short as possible — include only the lines that change, not entire functions.
             Implementation strategy for this branch: {strategy or "minimal — prefer the smallest correct change that makes the test pass."}
 
             {_engineering_standards()}
 
-            {_task_block(state)}
-            Current root cause: {state.get('root_cause', '')}
+            {_task_block(state, include_variable=False)}
             Repository context:
             {_repo_context_block(state)}
+
+            Current root cause: {state.get('root_cause', '')}
+            Latest feedback: {_format_feedback(state.get('latest_feedback') or 'None')}
+            {_team_messages_block(state)}
             """
         ).strip()
 
     return dedent(
         f"""
-        You are the {role} on a FAANG-style engineering team.
+        You are the {role} on an engineering team.
         Produce a patch proposal as a concise engineering note.
 
         Requirements:
@@ -213,17 +264,22 @@ def patch_prompt(state: dict[str, Any], role: str, strategy: str = "") -> str:
 
         {_engineering_standards()}
 
-        {_task_block(state)}
+        {_task_block(state, include_variable=False)}
+
         Current root cause: {state.get('root_cause', '')}
+        Latest feedback: {_format_feedback(state.get('latest_feedback') or 'None')}
+        {_team_messages_block(state)}
         """
     ).strip()
 
 
 def validation_prompt(state: dict[str, Any], role: str) -> str:
     if state.get("execution_mode") == "sandbox":
+        # Stable prefix: role + format + rules + standards + task spec
+        # Variable suffix: test results (changes every execution)
         return dedent(
             f"""
-            You are the {role} on a FAANG-style QA / validation team.
+            You are the {role} on a QA / validation team.
             Your job is to judge the patch based on actual execution results, not optimism.
 
             Summarize the real test execution result in JSON.
@@ -242,7 +298,8 @@ def validation_prompt(state: dict[str, Any], role: str) -> str:
 
             {_engineering_standards()}
 
-            {_task_block(state)}
+            {_task_block(state, include_variable=False)}
+
             Changed files: {', '.join(state.get('changed_files', [])) or 'None'}
             Test return code: {state.get('test_returncode')}
             Test stdout:
@@ -255,7 +312,7 @@ def validation_prompt(state: dict[str, Any], role: str) -> str:
 
     return dedent(
         f"""
-        You are the {role} on a FAANG-style QA / validation team.
+        You are the {role} on a QA / validation team.
         Evaluate whether the patch proposal satisfies the validation instructions.
 
         Respond in JSON with:
@@ -266,7 +323,8 @@ def validation_prompt(state: dict[str, Any], role: str) -> str:
 
         {_engineering_standards()}
 
-        {_task_block(state)}
+        {_task_block(state, include_variable=False)}
+
         Patch proposal:
         {state.get('current_patch', '')}
         """
@@ -275,9 +333,11 @@ def validation_prompt(state: dict[str, Any], role: str) -> str:
 
 def review_prompt(state: dict[str, Any], role: str) -> str:
     if state.get("execution_mode") == "sandbox":
+        # Stable prefix: role + format + rules + standards + task spec
+        # Variable suffix: patch results (changes every execution)
         return dedent(
             f"""
-            You are the {role} on a FAANG-style code review team.
+            You are the {role} on a code review team.
             Your job is to make a shipping recommendation after implementation and test execution.
 
             Review the real patch after actual test execution.
@@ -295,18 +355,22 @@ def review_prompt(state: dict[str, Any], role: str) -> str:
 
             {_engineering_standards()}
 
-            {_task_block(state)}
+            {_task_block(state, include_variable=False)}
+
             Patch summary: {state.get('patch_summary', '')}
             Changed files: {', '.join(state.get('changed_files', [])) or 'None'}
             Validation passed: {state.get('validation_passed')}
             Validation report: {state.get('validation_report', '')}
             Test return code: {state.get('test_returncode')}
+            Regression suite passed: {state.get('regression_passed')} (None means no regression command configured)
+            Patch diff:
+            {(state.get('patch_diff') or '')[:4000]}
             """
         ).strip()
 
     return dedent(
         f"""
-        You are the {role} on a FAANG-style code review team.
+        You are the {role} on a code review team.
         Review the patch proposal after validation.
 
         Respond in JSON with:
@@ -317,7 +381,8 @@ def review_prompt(state: dict[str, Any], role: str) -> str:
 
         {_engineering_standards()}
 
-        {_task_block(state)}
+        {_task_block(state, include_variable=False)}
+
         Validation passed: {state.get('validation_passed')}
         Validation report: {state.get('validation_report', '')}
         Patch proposal:
@@ -327,6 +392,8 @@ def review_prompt(state: dict[str, Any], role: str) -> str:
 
 
 def coordinator_decision_prompt(state: dict[str, Any], branch_results: list[dict[str, Any]]) -> str:
+    # Stable prefix: role + rules + format + standards + task spec
+    # Variable suffix: branch results (different each fanout)
     branches_block = ""
     for br in branch_results:
         branches_block += f"\n--- {br['branch_id']} ---\n"
@@ -340,8 +407,6 @@ def coordinator_decision_prompt(state: dict[str, Any], branch_results: list[dict
         f"""
         You are the Coordinator selecting the best engineer branch to ship.
 
-        Branch results:
-        {branches_block}
         Rules:
         - Prefer branches where validation passed and review recommends accept.
         - If multiple branches passed, prefer the one with the most targeted, minimal change.
@@ -355,6 +420,9 @@ def coordinator_decision_prompt(state: dict[str, Any], branch_results: list[dict
 
         {_engineering_standards()}
 
-        {_task_block(state)}
+        {_task_block(state, include_variable=False)}
+
+        Branch results:
+        {branches_block}
         """
     ).strip()

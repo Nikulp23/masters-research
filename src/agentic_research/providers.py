@@ -72,6 +72,13 @@ class OpenAIResearchBrain:
     model: str
     max_llm_calls: int
     system_prompt: str = ""
+    max_output_tokens_default: int = 350
+    # Per-phase output caps; overrides max_output_tokens_default when set.
+    phase_token_caps: dict[str, int] = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.phase_token_caps is None:
+            self.phase_token_caps = {}
 
     def _ensure_budget(self, state: dict[str, Any]) -> None:
         max_calls = state.get("max_llm_calls", self.max_llm_calls)
@@ -88,13 +95,17 @@ class OpenAIResearchBrain:
         *,
         role: str,
         phase: str,
-        max_output_tokens: int = 350,
+        max_output_tokens: int | None = None,
     ) -> str:
         self._ensure_budget(state)
         create_kwargs: dict[str, Any] = {
             "model": self.model,
             "input": prompt,
-            "max_output_tokens": max_output_tokens,
+            "max_output_tokens": (
+                max_output_tokens
+                if max_output_tokens is not None
+                else self.phase_token_caps.get(phase, self.max_output_tokens_default)
+            ),
         }
         if self.system_prompt:
             create_kwargs["instructions"] = self.system_prompt
@@ -102,7 +113,16 @@ class OpenAIResearchBrain:
         self._record_call(state)
         usage = getattr(response, "usage", None)
         if usage is not None:
-            state["tokens_used"] = state.get("tokens_used", 0) + getattr(usage, "total_tokens", 0)
+            call_tokens = getattr(usage, "total_tokens", 0)
+            state["tokens_used"] = state.get("tokens_used", 0) + call_tokens
+            by_role = state.get("tokens_by_role") or {}
+            by_role[role] = by_role.get(role, 0) + call_tokens
+            state["tokens_by_role"] = by_role
+            # Track cache hits for observability
+            prompt_details = getattr(usage, "prompt_tokens_details", None)
+            if prompt_details is not None:
+                cached = getattr(prompt_details, "cached_tokens", 0)
+                state["cached_tokens"] = state.get("cached_tokens", 0) + (cached or 0)
         text = response.output_text.strip()
         append_transcript_entry(
             state,
@@ -121,7 +141,7 @@ class OpenAIResearchBrain:
         *,
         role: str,
         phase: str,
-        max_output_tokens: int = 350,
+        max_output_tokens: int | None = None,
     ) -> dict[str, Any]:
         text = self._text_response(
             prompt,
@@ -161,13 +181,11 @@ class OpenAIResearchBrain:
         )
 
     def propose_patch(self, state: dict[str, Any], role: str, strategy: str = "") -> str:
-        max_tokens = 2000 if state.get("execution_mode") == "sandbox" else 350
         return self._text_response(
             patch_prompt(state, role, strategy=strategy),
             state,
             role=role,
             phase="propose_patch",
-            max_output_tokens=max_tokens,
         )
 
     def validate(self, state: dict[str, Any], role: str) -> tuple[bool, str]:
@@ -176,7 +194,6 @@ class OpenAIResearchBrain:
             state,
             role=role,
             phase="validate",
-            max_output_tokens=1000,
         )
         return bool(payload["passed"]), str(payload["report"])
 
@@ -186,7 +203,6 @@ class OpenAIResearchBrain:
             state,
             role=role,
             phase="review",
-            max_output_tokens=1000,
         )
         recommendation = payload["recommendation"]
         if recommendation not in {"accept", "revise"}:
@@ -199,7 +215,6 @@ class OpenAIResearchBrain:
             state,
             role="Coordinator",
             phase="branch_selection",
-            max_output_tokens=300,
         )
         selected = str(payload.get("selected_branch_id", ""))
         reasoning = str(payload.get("reasoning", ""))
@@ -216,44 +231,71 @@ def build_brain(config: ResearchConfig, role: str = "single") -> BrainProtocol:
     if not os.getenv("OPENAI_API_KEY"):
         raise RuntimeError("OPENAI_API_KEY is required when AGENTIC_MODE=openai.")
 
-    client = OpenAI()
+    # Single-agent brain handles all phases; cap each phase explicitly.
     return OpenAIResearchBrain(
-        client=client,
+        client=OpenAI(),
         model=config.openai_model,
         max_llm_calls=config.max_llm_calls,
         system_prompt=_ROLE_SYSTEM_PROMPTS.get(role, ""),
+        max_output_tokens_default=config.max_tokens_engineer,
+        phase_token_caps={
+            "validate": config.max_tokens_tester,
+            "review": config.max_tokens_reviewer,
+            "branch_selection": config.max_tokens_coordinator,
+            "plan": config.max_tokens_coordinator,
+        },
     )
+
+
+_ROLE_MODEL_ATTR = {
+    "engineer": "engineer_model",
+    "tester": "reviewer_model",   # cheap tier
+    "reviewer": "reviewer_model",
+    "coordinator": "coordinator_model",
+    "analyst": "coordinator_model",
+}
+
+_ROLE_MAX_TOKENS_ATTR = {
+    "engineer": "max_tokens_engineer",
+    "tester": "max_tokens_tester",
+    "reviewer": "max_tokens_reviewer",
+    "coordinator": "max_tokens_coordinator",
+    "analyst": "max_tokens_coordinator",
+}
 
 
 def build_multi_worker_brains(config: ResearchConfig) -> dict[str, Any]:
     """Build a set of role-specialised brains for the multi-agent workflow."""
     if config.mode == "deterministic":
         det = DeterministicResearchBrain()
+        n = max(config.multi_engineer_workers, 1)
         return {
             "coordinator": det,
             "analyst": det,
-            "engineers": [det for _ in range(max(config.multi_engineer_workers, 1))],
-            "tester": det,
-            "reviewer": det,
+            "engineers": [det for _ in range(n)],
+            "testers": [det for _ in range(n)],
+            "reviewers": [det for _ in range(n)],
         }
 
     if not os.getenv("OPENAI_API_KEY"):
         raise RuntimeError("OPENAI_API_KEY is required when AGENTIC_MODE=openai.")
 
-    client = OpenAI()
-
     def _brain(role: str) -> OpenAIResearchBrain:
+        model = getattr(config, _ROLE_MODEL_ATTR.get(role, "openai_model"), config.openai_model)
+        max_tokens = getattr(config, _ROLE_MAX_TOKENS_ATTR.get(role, "max_tokens_engineer"), config.max_tokens_engineer)
         return OpenAIResearchBrain(
-            client=client,
-            model=config.openai_model,
+            client=OpenAI(),
+            model=model,
             max_llm_calls=config.multi_max_llm_calls,
             system_prompt=_ROLE_SYSTEM_PROMPTS.get(role, ""),
+            max_output_tokens_default=max_tokens,
         )
 
+    n_branches = max(config.multi_engineer_workers, 1)
     return {
         "coordinator": _brain("coordinator"),
         "analyst": _brain("analyst"),
-        "engineers": [_brain("engineer") for _ in range(max(config.multi_engineer_workers, 1))],
-        "tester": _brain("tester"),
-        "reviewer": _brain("reviewer"),
+        "engineers": [_brain("engineer") for _ in range(n_branches)],
+        "testers": [_brain("tester") for _ in range(n_branches)],
+        "reviewers": [_brain("reviewer") for _ in range(n_branches)],
     }

@@ -13,20 +13,40 @@ load_dotenv()
 class ResearchConfig:
     mode: str
     openai_model: str
+    engineer_model: str
+    reviewer_model: str
+    coordinator_model: str
     max_iterations: int
     max_revision_rounds: int
     max_llm_calls: int
     multi_max_llm_calls: int
     multi_engineer_workers: int
+    # Per-role output token caps
+    max_tokens_engineer: int
+    max_tokens_reviewer: int
+    max_tokens_coordinator: int
+    max_tokens_tester: int
+    # Transcript / message history window
+    transcript_tail_k: int
 
 
 def load_config() -> ResearchConfig:
+    base_model = os.getenv("OPENAI_MODEL", "gpt-5.2-codex")
+    cheap_model = os.getenv("OPENAI_CHEAP_MODEL", "gpt-4.1-mini")
     return ResearchConfig(
         mode=os.getenv("AGENTIC_MODE", "deterministic"),
-        openai_model=os.getenv("OPENAI_MODEL", "gpt-5.1-codex-mini"),
-        max_iterations=int(os.getenv("AGENTIC_MAX_ITERATIONS", "50")),
-        max_revision_rounds=int(os.getenv("AGENTIC_MAX_REVISIONS", "30")),
-        max_llm_calls=int(os.getenv("AGENTIC_MAX_LLM_CALLS", "0")),
-        multi_max_llm_calls=int(os.getenv("AGENTIC_MULTI_MAX_LLM_CALLS", "0")),
+        openai_model=base_model,
+        engineer_model=os.getenv("OPENAI_ENGINEER_MODEL", base_model),
+        reviewer_model=os.getenv("OPENAI_REVIEWER_MODEL", cheap_model),
+        coordinator_model=os.getenv("OPENAI_COORDINATOR_MODEL", cheap_model),
+        max_iterations=int(os.getenv("AGENTIC_MAX_ITERATIONS", "15")),
+        max_revision_rounds=int(os.getenv("AGENTIC_MAX_REVISIONS", "5")),
+        max_llm_calls=int(os.getenv("AGENTIC_MAX_LLM_CALLS", "80")),
+        multi_max_llm_calls=int(os.getenv("AGENTIC_MULTI_MAX_LLM_CALLS", "120")),
         multi_engineer_workers=int(os.getenv("AGENTIC_MULTI_ENGINEER_WORKERS", "1")),
+        max_tokens_engineer=int(os.getenv("AGENTIC_MAX_TOKENS_ENGINEER", "16000")),
+        max_tokens_reviewer=int(os.getenv("AGENTIC_MAX_TOKENS_REVIEWER", "400")),
+        max_tokens_coordinator=int(os.getenv("AGENTIC_MAX_TOKENS_COORDINATOR", "300")),
+        max_tokens_tester=int(os.getenv("AGENTIC_MAX_TOKENS_TESTER", "500")),
+        transcript_tail_k=int(os.getenv("AGENTIC_TRANSCRIPT_TAIL_K", "6")),
     )
