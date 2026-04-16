@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import warnings
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, date
@@ -10,11 +11,56 @@ from typing import Any
 
 from .config import load_config
 from .graphs import compare_architectures, run_architecture
-from .site_export import export_site_data
 from .sample_tasks import SAMPLE_TASKS, get_task
 
 
 PROMPT_VERSION = "faang-v1"
+# Flag runs that spend more tokens than expected; helps catch regressions post-optimization.
+_TOKEN_BUDGET_WARN = int(os.getenv("AGENTIC_TOKEN_BUDGET_WARN", "60000"))
+
+# Ordered task lists by language — determines the number suffix in folder names.
+_TASKS_BY_LANGUAGE: dict[str, list[str]] = {
+    "python": [
+        "requests-netrc-empty-default",
+        "click-flag-value-optional",
+        "werkzeug-safe-join-device-names",
+        "flask-provide-automatic-options",
+        "flask-teardown-all-callbacks",
+    ],
+    "go": [
+        "gin-data-render-content-length",
+        "gin-form-binding-empty-slice",
+        "gin-literal-colon-route",
+        "validator-panic-unique-nil-pointer",
+        "testify-mock-assert-expectations-panic",
+    ],
+    "rust": [
+        "clap-builder-quote-empty-default",
+        "clap-parser-help-propagate-ignore-errors",
+        "clap-parser-value-terminator-regression",
+        "clap-complete-zsh-optional-value-args",
+        "clap-builder-default-vals-newline",
+    ],
+    "js": [
+        "react-router-create-routes-stub",
+        "react-router-double-slash-colon-path",
+        "react-router-optional-segment-slash",
+        "react-router-percent-encoding",
+        "react-router-client-loader-hydrate",
+        "ngrx-eslint-prefix-selectors",
+        "ngrx-component-illegal-invocation",
+        "ngrx-eslint-factory-with-state",
+        "ngrx-eslint-on-function-return-type",
+        "ngrx-signals-prod-assert-injection",
+    ],
+}
+
+# Reverse lookup: task_id -> "lang-N" folder label
+_TASK_FOLDER_LABEL: dict[str, str] = {
+    task_id: f"{lang}-{i + 1}"
+    for lang, task_ids in _TASKS_BY_LANGUAGE.items()
+    for i, task_id in enumerate(task_ids)
+}
 
 # Model training cutoff — bugs fixed on or before this date may be in training data.
 MODEL_TRAINING_CUTOFF = date(2025, 8, 1)
@@ -80,6 +126,9 @@ class BenchmarkRunRecord:
     revision_count: int
     llm_calls_used: int
     tokens_used: int
+    cached_tokens: int
+    tokens_by_role: dict[str, int]
+    token_budget_exceeded: bool
     test_returncode: int | None
     regression_passed: bool | None
     failure_category: str
@@ -97,6 +146,8 @@ class BenchmarkRunRecord:
     test_stderr: str
     selected_branch_id: str
     branch_results: list[dict[str, Any]]
+    attempt_notes: str
+    first_attempt_passed: bool
 
 
 def compact_result(result: dict[str, Any]) -> dict[str, Any]:
@@ -124,6 +175,8 @@ def compact_result(result: dict[str, Any]) -> dict[str, Any]:
         "engineer_worker_count": result.get("engineer_worker_count", 0),
         "selected_branch_id": result.get("selected_branch_id", ""),
         "branch_results": result.get("branch_results", []),
+        "attempt_notes": result.get("attempt_notes", ""),
+        "first_attempt_passed": result.get("first_attempt_passed", True),
     }
 
 
@@ -206,6 +259,9 @@ def _make_run_record(
         revision_count=int(metrics["revision_count"]),
         llm_calls_used=int(metrics["llm_calls_used"]),
         tokens_used=int(metrics.get("tokens_used", 0)),
+        cached_tokens=int(metrics.get("cached_tokens", 0)),
+        tokens_by_role=dict(metrics.get("tokens_by_role") or {}),
+        token_budget_exceeded=int(metrics.get("tokens_used", 0)) > _TOKEN_BUDGET_WARN,
         test_returncode=metrics.get("test_returncode"),
         regression_passed=metrics.get("regression_passed"),
         failure_category=failure_category,
@@ -223,14 +279,18 @@ def _make_run_record(
         test_stderr=result.get("test_stderr", ""),
         selected_branch_id=result.get("selected_branch_id", ""),
         branch_results=result.get("branch_results", []),
+        attempt_notes=result.get("attempt_notes", ""),
+        first_attempt_passed=bool(result.get("first_attempt_passed", True)),
     )
 
 
-def _ensure_output_dir(output_dir: str | None) -> Path:
-    root = Path(output_dir) if output_dir else Path("benchmark_runs") / _suite_id()
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "raw").mkdir(exist_ok=True)
-    return root
+def _task_arch_dir(task_id: str, architecture: str) -> Path:
+    """Return and create benchmark_runs/<lang-N>/<architecture>/."""
+    label = _TASK_FOLDER_LABEL.get(task_id, task_id)
+    path = Path("benchmark_runs") / label / architecture
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "raw").mkdir(exist_ok=True)
+    return path
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -266,10 +326,13 @@ def _write_summary_csv(path: Path, rows: list[BenchmarkRunRecord]) -> None:
         "revision_count",
         "llm_calls_used",
         "tokens_used",
+        "tokens_by_role",
         "test_returncode",
         "regression_passed",
         "failure_category",
         "changed_files",
+        "attempt_notes",
+        "first_attempt_passed",
     ]
     with path.open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
@@ -277,6 +340,7 @@ def _write_summary_csv(path: Path, rows: list[BenchmarkRunRecord]) -> None:
         for row in rows:
             payload = asdict(row)
             payload["changed_files"] = ";".join(row.changed_files)
+            payload["tokens_by_role"] = json.dumps(row.tokens_by_role, sort_keys=True)
             writer.writerow({key: payload[key] for key in fieldnames})
 
 
@@ -299,6 +363,8 @@ def _aggregate(rows: list[BenchmarkRunRecord]) -> dict[str, Any]:
                 "avg_latency_seconds": 0.0,
                 "avg_llm_calls_used": 0.0,
                 "avg_tokens_used": 0.0,
+                "avg_cached_tokens": 0.0,
+                "token_budget_exceeded_count": 0,
                 "failure_categories": {},
             },
         )
@@ -307,6 +373,8 @@ def _aggregate(rows: list[BenchmarkRunRecord]) -> dict[str, Any]:
         arch_bucket["avg_latency_seconds"] += row.latency_seconds
         arch_bucket["avg_llm_calls_used"] += row.llm_calls_used
         arch_bucket["avg_tokens_used"] += row.tokens_used
+        arch_bucket["avg_cached_tokens"] += row.cached_tokens
+        arch_bucket["token_budget_exceeded_count"] += int(row.token_budget_exceeded)
         arch_bucket["failure_categories"][row.failure_category] = (
             arch_bucket["failure_categories"].get(row.failure_category, 0) + 1
         )
@@ -318,6 +386,10 @@ def _aggregate(rows: list[BenchmarkRunRecord]) -> dict[str, Any]:
             arch_bucket["avg_latency_seconds"] = round(arch_bucket["avg_latency_seconds"] / runs, 6)
             arch_bucket["avg_llm_calls_used"] = round(arch_bucket["avg_llm_calls_used"] / runs, 3)
             arch_bucket["avg_tokens_used"] = round(arch_bucket["avg_tokens_used"] / runs, 1)
+            arch_bucket["avg_cached_tokens"] = round(arch_bucket["avg_cached_tokens"] / runs, 1)
+            arch_bucket["cache_hit_rate"] = round(
+                arch_bucket["avg_cached_tokens"] / arch_bucket["avg_tokens_used"], 3
+            ) if arch_bucket["avg_tokens_used"] > 0 else 0.0
 
     overall = {
         "total_runs": len(rows),
@@ -332,7 +404,6 @@ def run_benchmark_suite(
     task_ids: list[str],
     repeats: int = 1,
     architectures: list[str] | None = None,
-    output_dir: str | None = None,
 ) -> dict[str, Any]:
     if repeats < 1:
         raise ValueError("repeats must be at least 1")
@@ -344,20 +415,8 @@ def run_benchmark_suite(
         if task_id not in SAMPLE_TASKS:
             raise KeyError(f"Unknown task '{task_id}'")
 
-    root = _ensure_output_dir(output_dir)
-    suite_id = root.name
+    suite_id = _suite_id()
     records: list[BenchmarkRunRecord] = []
-
-    manifest = {
-        "suite_id": suite_id,
-        "created_at_utc": _timestamp(),
-        "task_ids": task_ids,
-        "repeats": repeats,
-        "architectures": selected_architectures,
-        "config": asdict(load_config()),
-        "prompt_version": PROMPT_VERSION,
-    }
-    _write_json(root / "manifest.json", manifest)
 
     for task_id in task_ids:
         check_task_leakage(SAMPLE_TASKS[task_id])
@@ -367,21 +426,30 @@ def run_benchmark_suite(
                 compact = compact_result(raw_result)
                 record = _make_run_record(suite_id, task_id, architecture, repeat_index, compact)
                 records.append(record)
-                _write_json(root / "raw" / f"{record.run_id}.json", asdict(record))
+                arch_dir = _task_arch_dir(task_id, architecture)
+                _write_json(arch_dir / "raw" / f"{record.run_id}.json", asdict(record))
+
+    # Write per-task-per-architecture summary.json
+    from collections import defaultdict
+    arch_records: dict[tuple[str, str], list[BenchmarkRunRecord]] = defaultdict(list)
+    for rec in records:
+        arch_records[(rec.task_id, rec.architecture)].append(rec)
+    for (task_id, architecture), recs in arch_records.items():
+        arch_dir = _task_arch_dir(task_id, architecture)
+        _write_json(arch_dir / "summary.json", _aggregate(recs))
 
     summary = _aggregate(records)
-    _write_json(root / "summary.json", summary)
-    _write_summary_csv(root / "summary.csv", records)
-    benchmark_root = Path("benchmark_runs").resolve()
-    try:
-        if root.resolve().is_relative_to(benchmark_root):
-            export_site_data(benchmark_root=benchmark_root)
-    except FileNotFoundError:
-        pass
     return {
         "suite_id": suite_id,
-        "output_dir": str(root),
-        "manifest": manifest,
+        "manifest": {
+            "suite_id": suite_id,
+            "created_at_utc": _timestamp(),
+            "task_ids": task_ids,
+            "repeats": repeats,
+            "architectures": selected_architectures,
+            "config": asdict(load_config()),
+            "prompt_version": PROMPT_VERSION,
+        },
         "summary": summary,
         "runs": [asdict(record) for record in records],
     }
