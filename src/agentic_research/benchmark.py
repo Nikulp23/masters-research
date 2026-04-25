@@ -18,6 +18,23 @@ PROMPT_VERSION = "faang-v1"
 # Flag runs that spend more tokens than expected; helps catch regressions post-optimization.
 _TOKEN_BUDGET_WARN = int(os.getenv("AGENTIC_TOKEN_BUDGET_WARN", "60000"))
 
+# Sonnet 4.6 pricing per token (approximate: 80% input, 20% output split)
+_PRICE_INPUT_PER_TOKEN = 3.00 / 1_000_000
+_PRICE_CACHE_READ_PER_TOKEN = 0.30 / 1_000_000
+_PRICE_OUTPUT_PER_TOKEN = 15.00 / 1_000_000
+
+
+def _estimate_cost(tokens_used: int, cached_tokens: int) -> float:
+    output_tokens = int(tokens_used * 0.25)
+    input_tokens = tokens_used - output_tokens
+    non_cached_input = max(0, input_tokens - cached_tokens)
+    return round(
+        non_cached_input * _PRICE_INPUT_PER_TOKEN
+        + cached_tokens * _PRICE_CACHE_READ_PER_TOKEN
+        + output_tokens * _PRICE_OUTPUT_PER_TOKEN,
+        6,
+    )
+
 # Ordered task lists by language — determines the number suffix in folder names.
 _TASKS_BY_LANGUAGE: dict[str, list[str]] = {
     "python": [
@@ -127,6 +144,7 @@ class BenchmarkRunRecord:
     llm_calls_used: int
     tokens_used: int
     cached_tokens: int
+    cost_usd: float
     tokens_by_role: dict[str, int]
     token_budget_exceeded: bool
     test_returncode: int | None
@@ -260,6 +278,7 @@ def _make_run_record(
         llm_calls_used=int(metrics["llm_calls_used"]),
         tokens_used=int(metrics.get("tokens_used", 0)),
         cached_tokens=int(metrics.get("cached_tokens", 0)),
+        cost_usd=_estimate_cost(int(metrics.get("tokens_used", 0)), int(metrics.get("cached_tokens", 0))),
         tokens_by_role=dict(metrics.get("tokens_by_role") or {}),
         token_budget_exceeded=int(metrics.get("tokens_used", 0)) > _TOKEN_BUDGET_WARN,
         test_returncode=metrics.get("test_returncode"),
@@ -326,6 +345,8 @@ def _write_summary_csv(path: Path, rows: list[BenchmarkRunRecord]) -> None:
         "revision_count",
         "llm_calls_used",
         "tokens_used",
+        "cached_tokens",
+        "cost_usd",
         "tokens_by_role",
         "test_returncode",
         "regression_passed",
@@ -364,6 +385,7 @@ def _aggregate(rows: list[BenchmarkRunRecord]) -> dict[str, Any]:
                 "avg_llm_calls_used": 0.0,
                 "avg_tokens_used": 0.0,
                 "avg_cached_tokens": 0.0,
+                "avg_cost_usd": 0.0,
                 "token_budget_exceeded_count": 0,
                 "failure_categories": {},
             },
@@ -374,6 +396,7 @@ def _aggregate(rows: list[BenchmarkRunRecord]) -> dict[str, Any]:
         arch_bucket["avg_llm_calls_used"] += row.llm_calls_used
         arch_bucket["avg_tokens_used"] += row.tokens_used
         arch_bucket["avg_cached_tokens"] += row.cached_tokens
+        arch_bucket["avg_cost_usd"] += row.cost_usd
         arch_bucket["token_budget_exceeded_count"] += int(row.token_budget_exceeded)
         arch_bucket["failure_categories"][row.failure_category] = (
             arch_bucket["failure_categories"].get(row.failure_category, 0) + 1
@@ -387,6 +410,7 @@ def _aggregate(rows: list[BenchmarkRunRecord]) -> dict[str, Any]:
             arch_bucket["avg_llm_calls_used"] = round(arch_bucket["avg_llm_calls_used"] / runs, 3)
             arch_bucket["avg_tokens_used"] = round(arch_bucket["avg_tokens_used"] / runs, 1)
             arch_bucket["avg_cached_tokens"] = round(arch_bucket["avg_cached_tokens"] / runs, 1)
+            arch_bucket["avg_cost_usd"] = round(arch_bucket["avg_cost_usd"] / runs, 6)
             arch_bucket["cache_hit_rate"] = round(
                 arch_bucket["avg_cached_tokens"] / arch_bucket["avg_tokens_used"], 3
             ) if arch_bucket["avg_tokens_used"] > 0 else 0.0
