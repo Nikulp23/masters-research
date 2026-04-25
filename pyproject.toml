@@ -13,7 +13,6 @@ dependencies = [
 [project.scripts]
 agentic-research = "agentic_research.cli:main"
 agentic-benchmark = "agentic_research.benchmark_cli:main"
-agentic-site-export = "agentic_research.site_export:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

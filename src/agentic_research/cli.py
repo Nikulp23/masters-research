@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from typing import Any
 
 from .benchmark import compact_result, run_compare_once
 from .graphs import run_architecture
@@ -21,7 +20,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--task",
         choices=sorted(SAMPLE_TASKS),
-        default="rerun-teardown",
+        default="requests-netrc-empty-default",
         help="Which built-in sample task to run.",
     )
     parser.add_argument(
