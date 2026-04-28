@@ -25,7 +25,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--mode",
-        choices=["deterministic", "openai"],
+        choices=["deterministic", "claude"],
         help="Override AGENTIC_MODE for this run.",
     )
     return parser

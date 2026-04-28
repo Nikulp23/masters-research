@@ -12,7 +12,7 @@ load_dotenv()
 @dataclass(frozen=True)
 class ResearchConfig:
     mode: str
-    openai_model: str
+    claude_model: str
     engineer_model: str
     reviewer_model: str
     coordinator_model: str
@@ -31,14 +31,14 @@ class ResearchConfig:
 
 
 def load_config() -> ResearchConfig:
-    base_model = os.getenv("OPENAI_MODEL", "gpt-5.2-codex")
-    cheap_model = os.getenv("OPENAI_CHEAP_MODEL", "gpt-4.1-mini")
+    base_model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+    cheap_model = os.getenv("ANTHROPIC_CHEAP_MODEL", "claude-sonnet-4-6")
     return ResearchConfig(
         mode=os.getenv("AGENTIC_MODE", "deterministic"),
-        openai_model=base_model,
-        engineer_model=os.getenv("OPENAI_ENGINEER_MODEL", base_model),
-        reviewer_model=os.getenv("OPENAI_REVIEWER_MODEL", cheap_model),
-        coordinator_model=os.getenv("OPENAI_COORDINATOR_MODEL", cheap_model),
+        claude_model=base_model,
+        engineer_model=os.getenv("ANTHROPIC_ENGINEER_MODEL", base_model),
+        reviewer_model=os.getenv("ANTHROPIC_REVIEWER_MODEL", cheap_model),
+        coordinator_model=os.getenv("ANTHROPIC_COORDINATOR_MODEL", cheap_model),
         max_iterations=int(os.getenv("AGENTIC_MAX_ITERATIONS", "15")),
         max_revision_rounds=int(os.getenv("AGENTIC_MAX_REVISIONS", "5")),
         max_llm_calls=int(os.getenv("AGENTIC_MAX_LLM_CALLS", "80")),

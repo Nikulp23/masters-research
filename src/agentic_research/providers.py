@@ -5,7 +5,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from openai import OpenAI
+from anthropic import Anthropic
 
 from .brains import DeterministicResearchBrain
 from .config import ResearchConfig
@@ -67,8 +67,8 @@ _ROLE_SYSTEM_PROMPTS: dict[str, str] = {
 
 
 @dataclass
-class OpenAIResearchBrain:
-    client: OpenAI
+class ClaudeResearchBrain:
+    client: Anthropic
     model: str
     max_llm_calls: int
     system_prompt: str = ""
@@ -100,30 +100,34 @@ class OpenAIResearchBrain:
         self._ensure_budget(state)
         create_kwargs: dict[str, Any] = {
             "model": self.model,
-            "input": prompt,
-            "max_output_tokens": (
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": (
                 max_output_tokens
                 if max_output_tokens is not None
                 else self.phase_token_caps.get(phase, self.max_output_tokens_default)
             ),
         }
         if self.system_prompt:
-            create_kwargs["instructions"] = self.system_prompt
-        response = self.client.responses.create(**create_kwargs)
+            create_kwargs["system"] = self.system_prompt
+        response = self.client.messages.create(**create_kwargs)
         self._record_call(state)
         usage = getattr(response, "usage", None)
         if usage is not None:
-            call_tokens = getattr(usage, "total_tokens", 0)
+            input_tokens = getattr(usage, "input_tokens", 0) or 0
+            output_tokens = getattr(usage, "output_tokens", 0) or 0
+            call_tokens = input_tokens + output_tokens
             state["tokens_used"] = state.get("tokens_used", 0) + call_tokens
+            state["input_tokens_used"] = state.get("input_tokens_used", 0) + input_tokens
+            state["output_tokens_used"] = state.get("output_tokens_used", 0) + output_tokens
             by_role = state.get("tokens_by_role") or {}
             by_role[role] = by_role.get(role, 0) + call_tokens
             state["tokens_by_role"] = by_role
             # Track cache hits for observability
-            prompt_details = getattr(usage, "prompt_tokens_details", None)
-            if prompt_details is not None:
-                cached = getattr(prompt_details, "cached_tokens", 0)
-                state["cached_tokens"] = state.get("cached_tokens", 0) + (cached or 0)
-        text = response.output_text.strip()
+            cached = getattr(usage, "cache_read_input_tokens", 0) or 0
+            state["cached_tokens"] = state.get("cached_tokens", 0) + cached
+        text = "".join(
+            block.text for block in response.content if getattr(block, "type", "") == "text"
+        ).strip()
         append_transcript_entry(
             state,
             role=role,
@@ -225,16 +229,16 @@ def build_brain(config: ResearchConfig, role: str = "single") -> BrainProtocol:
     if config.mode == "deterministic":
         return DeterministicResearchBrain()
 
-    if config.mode != "openai":
+    if config.mode != "claude":
         raise ValueError(f"Unsupported AGENTIC_MODE: {config.mode}")
 
-    if not os.getenv("OPENAI_API_KEY"):
-        raise RuntimeError("OPENAI_API_KEY is required when AGENTIC_MODE=openai.")
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        raise RuntimeError("ANTHROPIC_API_KEY is required when AGENTIC_MODE=claude.")
 
     # Single-agent brain handles all phases; cap each phase explicitly.
-    return OpenAIResearchBrain(
-        client=OpenAI(),
-        model=config.openai_model,
+    return ClaudeResearchBrain(
+        client=Anthropic(),
+        model=config.claude_model,
         max_llm_calls=config.max_llm_calls,
         system_prompt=_ROLE_SYSTEM_PROMPTS.get(role, ""),
         max_output_tokens_default=config.max_tokens_engineer,
@@ -277,14 +281,14 @@ def build_multi_worker_brains(config: ResearchConfig) -> dict[str, Any]:
             "reviewers": [det for _ in range(n)],
         }
 
-    if not os.getenv("OPENAI_API_KEY"):
-        raise RuntimeError("OPENAI_API_KEY is required when AGENTIC_MODE=openai.")
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        raise RuntimeError("ANTHROPIC_API_KEY is required when AGENTIC_MODE=claude.")
 
-    def _brain(role: str) -> OpenAIResearchBrain:
-        model = getattr(config, _ROLE_MODEL_ATTR.get(role, "openai_model"), config.openai_model)
+    def _brain(role: str) -> ClaudeResearchBrain:
+        model = getattr(config, _ROLE_MODEL_ATTR.get(role, "claude_model"), config.claude_model)
         max_tokens = getattr(config, _ROLE_MAX_TOKENS_ATTR.get(role, "max_tokens_engineer"), config.max_tokens_engineer)
-        return OpenAIResearchBrain(
-            client=OpenAI(),
+        return ClaudeResearchBrain(
+            client=Anthropic(),
             model=model,
             max_llm_calls=config.multi_max_llm_calls,
             system_prompt=_ROLE_SYSTEM_PROMPTS.get(role, ""),

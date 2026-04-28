@@ -264,7 +264,7 @@ def _make_run_record(
         engineer_worker_count=int(result.get("engineer_worker_count", 0)),
         repeat_index=repeat_index,
         mode=config.mode,
-        model=config.openai_model if config.mode == "openai" else "deterministic",
+        model=config.claude_model if config.mode == "claude" else "deterministic",
         prompt_version=PROMPT_VERSION,
         max_iterations=config.max_iterations,
         max_revision_rounds=config.max_revision_rounds,

@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "LangGraph research scaffold for comparing single-agent and multi-agent coding systems."
 requires-python = ">=3.11"
 dependencies = [
+  "anthropic",
   "langgraph",
   "langchain",
   "langchain-core",
