@@ -1,10 +1,21 @@
 .env
 __pycache__/
 *.pyc
+*.egg-info/
 benchmark_runs/
 site-data/
-*.egg-info/
 repos/
+analysis/
 HOW_TO_RUN.txt
 tasks.txt
-analysis/
+
+# LaTeX build artefacts
+report.pdf
+*.aux
+*.log
+*.fls
+*.fdb_latexmk
+*.out
+*.toc
+*.synctex.gz
+.claude/pateln14_master's_project_poster.pdf
