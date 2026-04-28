@@ -8,6 +8,7 @@ dependencies = [
   "langchain",
   "langchain-core",
   "pydantic>=2",
+  "python-dotenv",
 ]
 
 [project.scripts]
