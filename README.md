@@ -1,4 +1,4 @@
-# Real Repo. Real Fix. Real Test.
+# Nikul Patel - Master's Project
 
 This repository contains the benchmark harness for my master's project on
 single-agent vs. multi-agent LLM coding workflows.
