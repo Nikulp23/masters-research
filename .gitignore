@@ -10,6 +10,7 @@ HOW_TO_RUN.txt
 tasks.txt
 
 # LaTeX build artefacts
+report.tex
 report.pdf
 *.aux
 *.log
@@ -19,3 +20,6 @@ report.pdf
 *.toc
 *.synctex.gz
 .claude/pateln14_master's_project_poster.pdf
+scripts/generate_poster_charts.py
+scripts/inject_manual_run.py
+src/agentic_research/sample_tasks.py
