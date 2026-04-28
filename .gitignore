@@ -22,4 +22,3 @@ report.pdf
 .claude/pateln14_master's_project_poster.pdf
 scripts/generate_poster_charts.py
 scripts/inject_manual_run.py
-src/agentic_research/sample_tasks.py
