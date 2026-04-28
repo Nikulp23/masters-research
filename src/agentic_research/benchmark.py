@@ -14,6 +14,7 @@ from .graphs import compare_architectures, run_architecture
 from .sample_tasks import SAMPLE_TASKS, get_task
 
 
+# Version tag stamped on every run record so we can filter by prompt generation later.
 PROMPT_VERSION = "faang-v1"
 # Flag runs that spend more tokens than expected; helps catch regressions post-optimization.
 _TOKEN_BUDGET_WARN = int(os.getenv("AGENTIC_TOKEN_BUDGET_WARN", "60000"))
@@ -92,6 +93,8 @@ _TASK_FOLDER_LABEL: dict[str, str] = {
 MODEL_TRAINING_CUTOFF = date(2025, 8, 1)
 
 
+# Warn if the task's bug fix was committed before the model's training cutoff,
+# meaning the model may have already seen the correct answer.
 def check_task_leakage(task: dict[str, Any]) -> None:
     """Warn if a task's fix_date is within the model's training window."""
     task_type = task.get("task_type", "synthetic")
@@ -179,6 +182,7 @@ class BenchmarkRunRecord:
     first_attempt_passed: bool
 
 
+# Strip internal-only fields from a run result to keep saved JSON manageable.
 def compact_result(result: dict[str, Any]) -> dict[str, Any]:
     return {
         "task_id": result["task_id"],
@@ -209,6 +213,7 @@ def compact_result(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# Categorize why a run failed so we can aggregate failure modes across the benchmark.
 def classify_failure(result: dict[str, Any]) -> str:
     if result["final_status"] == "success":
         return "success"
@@ -383,6 +388,7 @@ def _write_summary_csv(path: Path, rows: list[BenchmarkRunRecord]) -> None:
             writer.writerow({key: payload[key] for key in fieldnames})
 
 
+# Roll up a list of run records into per-task / per-architecture summary stats.
 def _aggregate(rows: list[BenchmarkRunRecord]) -> dict[str, Any]:
     by_task: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -442,6 +448,7 @@ def _aggregate(rows: list[BenchmarkRunRecord]) -> dict[str, Any]:
     return {"overall": overall, "by_task": by_task}
 
 
+# Run every combination of task × architecture × repeat and write raw + summary JSON files.
 def run_benchmark_suite(
     task_ids: list[str],
     repeats: int = 1,

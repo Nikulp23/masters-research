@@ -5,6 +5,7 @@ from textwrap import dedent
 from typing import Any
 
 
+# Turn structured JSON feedback into a readable block for the next prompt.
 def _format_feedback(feedback: str) -> str:
     """Render structured feedback (JSON dict) as a readable block, or return as-is."""
     if not feedback:
@@ -29,6 +30,7 @@ def _format_feedback(feedback: str) -> str:
     return feedback
 
 
+# Shared engineering rules included in every prompt to keep the model on track.
 def _engineering_standards() -> str:
     return dedent(
         """
@@ -76,6 +78,7 @@ def _task_block(state: dict[str, Any], include_variable: bool = True) -> str:
     ).strip()
 
 
+# Format the loaded source files as a code block the model can read.
 def _repo_context_block(state: dict[str, Any]) -> str:
     if not state.get("repo_context"):
         return ""
@@ -93,6 +96,7 @@ def _message_scope_matches(state: dict[str, Any], message: dict[str, Any]) -> bo
     return message_branch == ""
 
 
+# Grab the last k messages visible to the current role and format them for the prompt.
 def _team_messages_block(state: dict[str, Any]) -> str:
     messages = state.get("messages", [])
     if not messages:

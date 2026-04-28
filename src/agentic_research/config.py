@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+# Immutable config snapshot for a single run — all settings come from env vars.
 @dataclass(frozen=True)
 class ResearchConfig:
     mode: str
@@ -30,6 +31,7 @@ class ResearchConfig:
     transcript_tail_k: int
 
 
+# Read all config from environment variables with sensible defaults.
 def load_config() -> ResearchConfig:
     base_model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
     cheap_model = os.getenv("ANTHROPIC_CHEAP_MODEL", "claude-sonnet-4-6")

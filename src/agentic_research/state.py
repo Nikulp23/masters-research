@@ -3,10 +3,14 @@ from __future__ import annotations
 from typing import Any, Literal, TypedDict
 
 
+# Possible final outcomes for a run
 Status = Literal["in_progress", "success", "failed"]
+# What the reviewer returns after inspecting the patch
 ReviewRecommendation = Literal["accept", "revise"]
 
 
+# All the fields passed between graph nodes throughout a run.
+# total=False means every field is optional so nodes can return partial updates.
 class AgentState(TypedDict, total=False):
     task_id: str
     title: str
@@ -70,6 +74,7 @@ class AgentState(TypedDict, total=False):
     metrics: dict[str, Any]
 
 
+# Build the starting state dict from a task spec before the graph runs.
 def build_initial_state(
     task: dict[str, Any],
     architecture: Literal["single", "multi"],

@@ -32,6 +32,7 @@ class BrainProtocol(Protocol):
     def coordinator_decision(self, state: dict[str, Any], branch_results: list[dict[str, Any]]) -> tuple[str, str]: ...
 
 
+# System prompt for each agent role — sets the persona and focus area.
 _ROLE_SYSTEM_PROMPTS: dict[str, str] = {
     "coordinator": (
         "You are a Tech Lead coordinating a multi-agent software engineering team. "
@@ -80,11 +81,13 @@ class ClaudeResearchBrain:
         if self.phase_token_caps is None:
             self.phase_token_caps = {}
 
+    # Raise before making an LLM call if the per-run call limit has been reached.
     def _ensure_budget(self, state: dict[str, Any]) -> None:
         max_calls = state.get("max_llm_calls", self.max_llm_calls)
         if max_calls is not None and max_calls > 0 and state.get("llm_calls_used", 0) >= max_calls:
             raise RuntimeError("LLM call budget exhausted.")
 
+    # Increment the call counter after a successful LLM response.
     def _record_call(self, state: dict[str, Any]) -> None:
         state["llm_calls_used"] = state.get("llm_calls_used", 0) + 1
 
@@ -138,6 +141,7 @@ class ClaudeResearchBrain:
         )
         return text
 
+    # Call the LLM and parse the first JSON object out of the response text.
     def _json_response(
         self,
         prompt: str,
@@ -225,6 +229,7 @@ class ClaudeResearchBrain:
         return selected, reasoning
 
 
+# Create the right brain based on config mode: deterministic stub or real Claude.
 def build_brain(config: ResearchConfig, role: str = "single") -> BrainProtocol:
     if config.mode == "deterministic":
         return DeterministicResearchBrain()
@@ -251,6 +256,7 @@ def build_brain(config: ResearchConfig, role: str = "single") -> BrainProtocol:
     )
 
 
+# Maps role names to the config attribute that holds the model to use for that role.
 _ROLE_MODEL_ATTR = {
     "engineer": "engineer_model",
     "tester": "reviewer_model",   # cheap tier

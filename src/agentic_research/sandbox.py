@@ -76,6 +76,7 @@ def _git_baseline(workspace_path: str) -> None:
         subprocess.run(cmd, cwd=workspace_path, capture_output=True, env=env)
 
 
+# Copy the task's fixture or real repo into a temp directory so the agent can edit it safely.
 def create_workspace(task: dict[str, Any]) -> str:
     fixture_dir = task.get("fixture_dir")
     source_repo_path = task.get("source_repo_path")
@@ -125,6 +126,7 @@ def create_workspace(task: dict[str, Any]) -> str:
     return str(workspace)
 
 
+# Duplicate an existing workspace into a fresh temp dir (used for multi-branch fanout).
 def clone_workspace(workspace_path: str, suffix: str) -> str:
     source = Path(workspace_path)
     if not source.exists():
@@ -150,6 +152,7 @@ def clone_workspace(workspace_path: str, suffix: str) -> str:
     return str(cloned)
 
 
+# Create a .venv in the workspace and install the project + test deps.
 def setup_virtualenv(workspace_path: str, test_command: list[str] | None = None) -> str:
     workspace = Path(workspace_path)
     venv_dir = workspace / ".venv"
@@ -249,6 +252,7 @@ def load_existing_file_bundle(workspace_path: str, paths: list[str]) -> dict[str
     return bundle
 
 
+# Apply find-and-replace edits from the agent's patch payload to workspace files.
 def apply_text_edits(
     workspace_path: str,
     edits: list[dict[str, str]],
@@ -282,6 +286,7 @@ def parse_patch_payload(payload: str) -> dict[str, Any]:
     return json.loads(payload[start : end + 1])
 
 
+# Write full file contents from the agent's patch — used when the agent returns complete files.
 def apply_file_updates(workspace_path: str, updates: dict[str, str], editable_files: list[str]) -> list[str]:
     workspace = Path(workspace_path)
     editable = set(editable_files)
@@ -295,6 +300,7 @@ def apply_file_updates(workspace_path: str, updates: dict[str, str], editable_fi
     return changed
 
 
+# Run the task's test command in the workspace and return stdout/stderr/returncode.
 def run_test_command(workspace_path: str, command: list[str], env_overrides: dict[str, str] | None = None) -> dict[str, Any]:
     command = _rewrite_python_command(command, env_overrides)
     env = _build_env(workspace_path, env_overrides)
@@ -321,6 +327,8 @@ def _build_env(workspace_path: str, env_overrides: dict[str, str] | None = None)
     return env
 
 
+# Verify the workspace is set up correctly before letting the agent touch anything.
+# Checks that required files exist and the test framework can discover the tests.
 def run_test_preflight(
     workspace_path: str,
     command: list[str],

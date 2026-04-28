@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 
+# Append one structured entry to the run transcript for later review or export.
 def append_transcript_entry(
     state: dict[str, Any],
     *,

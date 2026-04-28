@@ -28,10 +28,11 @@ from .sample_tasks import TaskSpec, get_task
 from .state import AgentState, build_initial_state
 from .transcript import append_transcript_entry
 
-MULTI_WORKFLOW_ROLE_COUNT = 5
+MULTI_WORKFLOW_ROLE_COUNT = 5  # coordinator + analyst + engineer + tester + reviewer
 _TEST_OUTPUT_HEAD_LINES = 80
 _TEST_OUTPUT_TAIL_LINES = 80
 
+# Two different approaches given to parallel engineer branches to get diverse patches.
 ENGINEER_STRATEGIES = [
     "minimal-surgical — the smallest possible diff at the exact failure site. Touch only what is broken. Prefer a single-line or single-expression fix. Do NOT refactor adjacent code even if it looks suspicious.",
     "defensive-root-cause — address the underlying root cause even if it requires touching adjacent code. If the bug is a symptom of a broader invariant violation, fix the invariant. Prefer correctness over minimalism.",
@@ -58,6 +59,7 @@ def _truncate_messages(messages: list[dict[str, Any]], k: int) -> list[dict[str,
     return messages[-k:]
 
 
+# Sort key that ranks branches: accepted+validated first, then by return code, then by id.
 def _branch_sort_key(branch: dict[str, Any]) -> tuple[int, int, int, str]:
     return (
         0 if branch.get("validation_passed") and branch.get("review_recommendation") == "accept" else 1,
@@ -156,6 +158,7 @@ def _message_scope_matches(message: dict[str, Any], branch_id: str = "") -> bool
 
 
 
+# Set up the sandbox workspace and load repo files into state before the graph starts.
 def _prepare_execution_state(task: TaskSpec, state: AgentState) -> AgentState:
     if task.get("execution_mode") != "sandbox":
         return state
@@ -173,6 +176,8 @@ def _prepare_execution_state(task: TaskSpec, state: AgentState) -> AgentState:
     }
 
 
+# Run preflight checks and return a failed state if anything is broken before the agent starts.
+# Returns None if preflight passes so the caller can continue normally.
 def _run_harness_preflight(task: TaskSpec, state: AgentState) -> AgentState | None:
     if task.get("execution_mode") != "sandbox":
         return None
@@ -220,6 +225,8 @@ def _run_harness_preflight(task: TaskSpec, state: AgentState) -> AgentState | No
     return failed_state
 
 
+# Apply the agent's patch to the sandbox and run the real test command.
+# Returns state fields with test results so the tester/reviewer can evaluate them.
 def _execute_real_patch(state: AgentState, patch_payload: str, role: str) -> AgentState:
     parsed = parse_patch_payload(patch_payload)
     summary = parsed.get("summary", "")
@@ -386,6 +393,7 @@ def _deterministic_review(state: AgentState, role: str) -> tuple[Literal["accept
     return recommendation, notes
 
 
+# Fingerprint the current outcome so we can detect when the agent makes no progress.
 def _progress_signature(state: AgentState) -> str:
     changed_files = ",".join(sorted(state.get("changed_files", [])))
     return "|".join(
@@ -471,6 +479,7 @@ def _narrow_repo_context_from_diagnosis(
     return updated
 
 
+# One full iteration of the single-agent loop: summarize → diagnose → patch → validate → review.
 def _single_cycle(state: AgentState, brain: BrainProtocol) -> AgentState:
     next_iteration = state["iteration_count"] + 1
     working_state: AgentState = {**state, "iteration_count": next_iteration}
@@ -600,6 +609,7 @@ def _single_cycle(state: AgentState, brain: BrainProtocol) -> AgentState:
     return working
 
 
+# Coordinator node: creates a plan and broadcasts it to the rest of the team.
 def _coordinator(state: AgentState, brain: BrainProtocol) -> AgentState:
     working_state: AgentState = {**state}
     try:
@@ -631,6 +641,7 @@ def _coordinator(state: AgentState, brain: BrainProtocol) -> AgentState:
     return update
 
 
+# Analyst node: summarizes the issue and diagnoses the root cause for the engineers.
 def _analyst(state: AgentState, brain: BrainProtocol) -> AgentState:
     next_iteration = state["iteration_count"] + 1
     working_state: AgentState = {**state, "iteration_count": next_iteration}
@@ -696,6 +707,7 @@ def _analyst(state: AgentState, brain: BrainProtocol) -> AgentState:
     return update
 
 
+# Engineer node: proposes a patch, then applies and tests it if running in sandbox mode.
 def _engineer(state: AgentState, brain: BrainProtocol, strategy: str = "") -> AgentState:
     working_state: AgentState = {**state}
     try:
@@ -743,6 +755,7 @@ def _engineer(state: AgentState, brain: BrainProtocol, strategy: str = "") -> Ag
     return update
 
 
+# Tester node: decides if the patch passed based on real test output or LLM judgment.
 def _tester(state: AgentState, brain: BrainProtocol) -> AgentState:
     working_state: AgentState = {**state}
     if state.get("execution_mode") == "sandbox":
@@ -770,6 +783,7 @@ def _tester(state: AgentState, brain: BrainProtocol) -> AgentState:
     }
 
 
+# Reviewer node: accept or request revisions based on patch quality and test results.
 def _reviewer(state: AgentState, brain: BrainProtocol) -> AgentState:
     working_state: AgentState = {**state}
     if state.get("execution_mode") == "sandbox":
@@ -796,6 +810,8 @@ def _reviewer(state: AgentState, brain: BrainProtocol) -> AgentState:
     }
 
 
+# Run one full engineer → tester → reviewer pipeline for a single branch.
+# Each branch gets its own workspace clone and a different fix strategy.
 def _run_engineer_branch(
     state: AgentState,
     engineer_brain: BrainProtocol,
@@ -857,6 +873,7 @@ def _run_engineer_branch(
     }
 
 
+# Run all engineer branches in parallel then let the coordinator pick the best result.
 def _engineer_fanout(state: AgentState, worker_brains: dict[str, Any]) -> AgentState:
     engineer_brains = worker_brains["engineers"]
     testers = worker_brains["testers"]
@@ -938,6 +955,7 @@ def _engineer_fanout(state: AgentState, worker_brains: dict[str, Any]) -> AgentS
     }
 
 
+# Coordinator decision node: mark the run as success/failed/in_progress and build feedback.
 def _coordinator_decide(state: AgentState) -> AgentState:
     success = state["validation_passed"] and state["review_recommendation"] == "accept"
     budget_exceeded = state["max_llm_calls"] > 0 and state["llm_calls_used"] >= state["max_llm_calls"]
@@ -1021,6 +1039,7 @@ def _coordinator_decide(state: AgentState) -> AgentState:
     }
 
 
+# Route back to another cycle or exit depending on whether the run is still in progress.
 def _single_route(state: AgentState) -> str:
     return END if state["final_status"] in {"success", "failed"} else "single_cycle"
 
@@ -1029,6 +1048,7 @@ def _multi_route(state: AgentState) -> str:
     return END if state["final_status"] in {"success", "failed"} else "coordinator"
 
 
+# Wire up the single-agent graph: one node that loops until done.
 def build_single_graph(brain: BrainProtocol):
     graph = StateGraph(AgentState)
     graph.add_node("single_cycle", lambda state: _single_cycle(state, brain))
@@ -1037,6 +1057,7 @@ def build_single_graph(brain: BrainProtocol):
     return graph.compile()
 
 
+# Wire up the multi-agent graph: coordinator → analyst → parallel engineers → decide → loop.
 def build_multi_graph(worker_brains: dict[str, Any]):
     graph = StateGraph(AgentState)
     graph.add_node("coordinator", lambda state: _coordinator(state, worker_brains["coordinator"]))
@@ -1051,6 +1072,7 @@ def build_multi_graph(worker_brains: dict[str, Any]):
     return graph.compile()
 
 
+# Top-level entry point: build the right graph, run it, and return the final state with metrics.
 def run_architecture(
     architecture: Literal["single", "multi"],
     task: TaskSpec | None = None,

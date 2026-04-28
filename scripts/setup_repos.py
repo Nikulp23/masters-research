@@ -238,6 +238,7 @@ def run(cmd: list[str], cwd: str | None = None) -> int:
     return result.returncode
 
 
+# Clone the repo if it doesn't exist yet, then run its install command.
 def setup_repo(repo: dict, skip_install: bool) -> bool:
     dest = Path(repo["dest"])
     print(f"\n{'='*60}")
@@ -268,6 +269,7 @@ def setup_repo(repo: dict, skip_install: bool) -> bool:
     return True
 
 
+# Parse CLI args and set up whichever repos were requested (or all of them by default).
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Clone and set up all benchmark repositories."

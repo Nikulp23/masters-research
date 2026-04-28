@@ -17,6 +17,7 @@ from .transcript import append_transcript_entry
 class DeterministicResearchBrain:
     """Local deterministic simulator for the first runnable prototype."""
 
+    # Returns a canned summary string without calling any LLM.
     def summarize_issue(self, state: dict[str, Any], role: str) -> str:
         constraints = "; ".join(state["constraints"])
         response = (
@@ -70,7 +71,8 @@ class DeterministicResearchBrain:
         revision = state["revision_count"]
         difficulty = state["difficulty"]
 
-        # Harder tasks initially miss one requirement to force the revision path.
+        # Deliberately omit one keyword on the first attempt for harder tasks
+        # so the revision loop gets exercised during testing.
         if role == "Single Agent":
             if difficulty in {"medium", "hard"} and revision == 0 and len(keywords) > 1:
                 included = keywords[:-1]
@@ -241,6 +243,7 @@ class DeterministicResearchBrain:
     def coordinator_decision(self, state: dict[str, Any], branch_results: list[dict[str, Any]]) -> tuple[str, str]:
         if not branch_results:
             return "", "No branches to evaluate."
+        # Sort branches: prefer ones that both passed validation and got accepted by review.
         def _sort_key(b: dict[str, Any]) -> tuple[int, int, int, str]:
             return (
                 0 if b.get("validation_passed") and b.get("review_recommendation") == "accept" else 1,
