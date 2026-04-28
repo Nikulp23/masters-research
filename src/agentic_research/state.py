@@ -58,6 +58,8 @@ class AgentState(TypedDict, total=False):
     max_revision_rounds: int
     llm_calls_used: int
     tokens_used: int
+    input_tokens_used: int
+    output_tokens_used: int
     cached_tokens: int
     tokens_by_role: dict[str, int]
     max_llm_calls: int
@@ -127,6 +129,8 @@ def build_initial_state(
         "max_revision_rounds": max_revision_rounds,
         "llm_calls_used": 0,
         "tokens_used": 0,
+        "input_tokens_used": 0,
+        "output_tokens_used": 0,
         "cached_tokens": 0,
         "tokens_by_role": {},
         "max_llm_calls": max_llm_calls,

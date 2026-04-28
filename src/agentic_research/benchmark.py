@@ -18,15 +18,24 @@ PROMPT_VERSION = "faang-v1"
 # Flag runs that spend more tokens than expected; helps catch regressions post-optimization.
 _TOKEN_BUDGET_WARN = int(os.getenv("AGENTIC_TOKEN_BUDGET_WARN", "60000"))
 
-# Sonnet 4.6 pricing per token (approximate: 80% input, 20% output split)
+# Sonnet 4.6 pricing per token.
 _PRICE_INPUT_PER_TOKEN = 3.00 / 1_000_000
 _PRICE_CACHE_READ_PER_TOKEN = 0.30 / 1_000_000
 _PRICE_OUTPUT_PER_TOKEN = 15.00 / 1_000_000
 
 
-def _estimate_cost(tokens_used: int, cached_tokens: int) -> float:
-    output_tokens = int(tokens_used * 0.25)
-    input_tokens = tokens_used - output_tokens
+def _estimate_cost(
+    tokens_used: int,
+    cached_tokens: int,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+) -> float:
+    # Prefer measured input/output token counts from the provider response.
+    # Fall back to a 75/25 split only when the run record predates per-call
+    # input/output logging.
+    if input_tokens <= 0 and output_tokens <= 0 and tokens_used > 0:
+        output_tokens = int(tokens_used * 0.25)
+        input_tokens = tokens_used - output_tokens
     non_cached_input = max(0, input_tokens - cached_tokens)
     return round(
         non_cached_input * _PRICE_INPUT_PER_TOKEN
@@ -143,6 +152,8 @@ class BenchmarkRunRecord:
     revision_count: int
     llm_calls_used: int
     tokens_used: int
+    input_tokens_used: int
+    output_tokens_used: int
     cached_tokens: int
     cost_usd: float
     tokens_by_role: dict[str, int]
@@ -277,8 +288,15 @@ def _make_run_record(
         revision_count=int(metrics["revision_count"]),
         llm_calls_used=int(metrics["llm_calls_used"]),
         tokens_used=int(metrics.get("tokens_used", 0)),
+        input_tokens_used=int(metrics.get("input_tokens_used", 0)),
+        output_tokens_used=int(metrics.get("output_tokens_used", 0)),
         cached_tokens=int(metrics.get("cached_tokens", 0)),
-        cost_usd=_estimate_cost(int(metrics.get("tokens_used", 0)), int(metrics.get("cached_tokens", 0))),
+        cost_usd=_estimate_cost(
+            int(metrics.get("tokens_used", 0)),
+            int(metrics.get("cached_tokens", 0)),
+            int(metrics.get("input_tokens_used", 0)),
+            int(metrics.get("output_tokens_used", 0)),
+        ),
         tokens_by_role=dict(metrics.get("tokens_by_role") or {}),
         token_budget_exceeded=int(metrics.get("tokens_used", 0)) > _TOKEN_BUDGET_WARN,
         test_returncode=metrics.get("test_returncode"),
